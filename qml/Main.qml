@@ -19,7 +19,6 @@ Window {
     readonly property int actionIconSize: root.isPortrait ? 24 : 20
     readonly property int actionBusySize: root.isPortrait ? 28 : 24
 
-    property string backendImageSource: root.backend.currentImage
     property string requestedPhotoSource: ""
     property bool photoTransitionRunning: false
 
@@ -88,9 +87,15 @@ Window {
         crossFade.restart()
     }
 
-    onBackendImageSourceChanged: root.queuePhotoSource(backendImageSource)
+    Connections {
+        target: root.backend
 
-    Component.onCompleted: root.queuePhotoSource(backendImageSource)
+        function onCurrentImageChanged() {
+            root.queuePhotoSource(root.backend.currentImage)
+        }
+    }
+
+    Component.onCompleted: root.queuePhotoSource(root.backend.currentImage)
 
     Image {
         id: photoCurrent
@@ -272,6 +277,7 @@ Window {
                     icon.source: root.uiIconSource("sync.svg")
                     icon.width: root.actionIconSize
                     icon.height: root.actionIconSize
+                    icon.color: "#ffffff"
                     enabled: root.backend.syncEnabled
                     opacity: enabled ? 1.0 : 0.45
                     onClicked: root.backend.syncNow()
@@ -295,6 +301,7 @@ Window {
                     icon.source: root.uiIconSource("shutdown.svg")
                     icon.width: root.actionIconSize
                     icon.height: root.actionIconSize
+                    icon.color: "#ffffff"
                     onClicked: root.backend.shutdownNow()
 
                     background: Rectangle {
