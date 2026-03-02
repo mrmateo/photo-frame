@@ -171,7 +171,7 @@ def main() -> int:
         weather_icon_base = str(APP_DIR / 'assets' / 'weather')
         logger.warning(
             'Running without embedded resources (rc_resources.py missing). '
-            'Use pyside6-project build for deployable builds.'
+            'Use pyside6-rcc resources.qrc -o rc_resources.py for deployable builds.'
         )
 
     logger.info('Photos directory resolved to: %s', config.resolve_photos_path())

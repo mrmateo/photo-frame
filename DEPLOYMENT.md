@@ -1,16 +1,18 @@
 # Deployment Guide (PySide6 + Qt Quick)
 
-This guide follows Qt for Python deployment recommendations (`pyside6-project`, `pyside6-deploy`, Qt Resource System).
+This guide follows Qt for Python deployment recommendations (`pyside6-rcc`, `pyside6-deploy`, Qt Resource System).
 
 ## 1) Prepare project
 From repo root:
 
 ```bash
+python3 -m venv venv
 venv/bin/python -m pip install -r requirements.txt
-venv/bin/pyside6-project build .
+venv/bin/pyside6-rcc resources.qrc -o rc_resources.py
 ```
 
 That build step generates `rc_resources.py` from `resources.qrc`, allowing `qrc:/` loading of QML and assets.
+This project intentionally stays on PySide6 6.8.x for Raspberry Pi compatibility.
 
 ## 2) Local smoke test
 
@@ -120,24 +122,3 @@ For deterministic behavior, set `shutdown_command` in config:
 ```
 
 If privileges are insufficient, configure polkit/sudoers for your deployment user.
-
-## 10) Collect diagnostics for tuning
-Run on the Raspberry Pi and share output:
-
-```bash
-bash /opt/photo-frame/deploy/collect_pi_diagnostics.sh | tee photo_frame_diag.txt
-```
-
-If running directly from this repo path instead of `/opt`:
-
-```bash
-bash deploy/collect_pi_diagnostics.sh | tee photo_frame_diag.txt
-```
-
-Optional overrides:
-
-```bash
-APP_DIR=/your/app/path PYTHON_BIN=/your/python/path APP_SERVICE=photo_frame.service bash deploy/collect_pi_diagnostics.sh | tee photo_frame_diag.txt
-```
-
-The script captures display/session/service/Qt details but does not print `config.json` secrets.
