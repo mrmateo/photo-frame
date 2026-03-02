@@ -33,7 +33,7 @@ Window {
         if (!nextSource || nextSource.length === 0) {
             requestedPhotoSource = ""
             photoTransitionRunning = false
-            crossFade.stop()
+            fadeInAnimation.stop()
             photoCurrent.source = ""
             photoNext.source = ""
             photoCurrent.opacity = 0
@@ -48,6 +48,7 @@ Window {
         }
 
         if (photoCurrent.source === nextSource && photoCurrent.opacity > 0.99) {
+            requestedPhotoSource = ""
             return
         }
 
@@ -75,16 +76,15 @@ Window {
             photoCurrent.opacity = 1
             photoNext.opacity = 0
             photoNext.source = ""
+            requestedPhotoSource = ""
             return
         }
 
         photoTransitionRunning = true
         photoNext.opacity = 0
-        fadeOutAnimation.from = photoCurrent.opacity
-        fadeOutAnimation.to = 0.0
-        fadeInAnimation.from = photoNext.opacity
+        fadeInAnimation.from = 0.0
         fadeInAnimation.to = 1.0
-        crossFade.restart()
+        fadeInAnimation.restart()
     }
 
     Connections {
@@ -133,34 +133,24 @@ Window {
         }
     }
 
-    ParallelAnimation {
-        id: crossFade
-
-        NumberAnimation {
-            id: fadeOutAnimation
-            target: photoCurrent
-            property: "opacity"
-            duration: 620
-            easing.type: Easing.InOutQuad
-        }
-
-        NumberAnimation {
-            id: fadeInAnimation
-            target: photoNext
-            property: "opacity"
-            duration: 620
-            easing.type: Easing.InOutQuad
-        }
+    NumberAnimation {
+        id: fadeInAnimation
+        target: photoNext
+        property: "opacity"
+        duration: 620
+        easing.type: Easing.InOutQuad
 
         onFinished: {
+            var pendingSource = requestedPhotoSource
             photoCurrent.source = photoNext.source
             photoCurrent.opacity = 1
             photoNext.opacity = 0
             photoNext.source = ""
             root.photoTransitionRunning = false
+            requestedPhotoSource = ""
 
-            if (requestedPhotoSource.length > 0 && requestedPhotoSource !== photoCurrent.source) {
-                root.queuePhotoSource(requestedPhotoSource)
+            if (pendingSource.length > 0 && pendingSource !== photoCurrent.source) {
+                root.queuePhotoSource(pendingSource)
             }
         }
     }
