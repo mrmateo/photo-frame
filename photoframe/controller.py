@@ -17,6 +17,7 @@ from .weather_service import WeatherService
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 SYNC_STATUS_CLEAR_MS = 10_000
+CLOCK_MINUTE_INTERVAL_MS = 60_000
 
 WEATHER_ICON_KEYS = {
     'sunny': 'sun',
@@ -93,7 +94,7 @@ class PhotoFrameController(QObject):
         self._image_timer.timeout.connect(self._advance_image_timer)
 
         self._clock_timer = QTimer(self)
-        self._clock_timer.timeout.connect(self._update_clock)
+        self._clock_timer.timeout.connect(self._on_clock_timer)
 
         self._weather_timer = QTimer(self)
         self._weather_timer.timeout.connect(self.refreshWeather)
@@ -157,7 +158,7 @@ class PhotoFrameController(QObject):
         self._update_clock()
 
         self._image_timer.start(self._image_cycle_interval_ms())
-        self._clock_timer.start(1000)
+        self._start_clock_timer()
         hourly_interval_ms = self._hourly_interval_ms()
         self._weather_timer.start(hourly_interval_ms)
         self._sync_timer.start(hourly_interval_ms)
@@ -264,6 +265,18 @@ class PhotoFrameController(QObject):
         now = datetime.now()
         self._set_clock_text(now.strftime('%I:%M %p'))
         self._set_date_text(now.strftime('%A, %b %d'))
+
+    def _start_clock_timer(self) -> None:
+        now = datetime.now()
+        milliseconds_until_next_minute = (
+            ((59 - now.second) * 1000)
+            + (1000 - (now.microsecond // 1000))
+        )
+        self._clock_timer.start(max(1_000, milliseconds_until_next_minute))
+
+    def _on_clock_timer(self) -> None:
+        self._update_clock()
+        self._clock_timer.start(CLOCK_MINUTE_INTERVAL_MS)
 
     def _image_cycle_interval_ms(self) -> int:
         return max(1, self.config.image_cycle_seconds) * 1000

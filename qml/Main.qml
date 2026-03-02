@@ -107,7 +107,6 @@ Window {
         sourceSize.width: Math.max(1, root.width)
         sourceSize.height: Math.max(1, root.height)
         opacity: 0
-        z: -1
     }
 
     Image {
@@ -120,8 +119,7 @@ Window {
         sourceSize.width: Math.max(1, root.width)
         sourceSize.height: Math.max(1, root.height)
         opacity: 0
-        visible: source.length > 0
-        z: photoTransitionRunning ? 0 : -2
+        visible: photoTransitionRunning
 
         onStatusChanged: {
             if (photoTransitionRunning || requestedPhotoSource.length === 0) {

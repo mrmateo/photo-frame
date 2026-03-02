@@ -14,6 +14,8 @@ if [[ -n "${LC_ALL:-}" && "${LC_ALL}" != *"UTF-8"* && "${LC_ALL}" != *"utf8"* ]]
 fi
 
 export QT_QUICK_CONTROLS_STYLE="Basic"
+export QSG_RENDER_LOOP="${QSG_RENDER_LOOP:-basic}"
+export QSG_RHI_BACKEND="${QSG_RHI_BACKEND:-opengl}"
 
 if [[ -z "${QT_QPA_PLATFORM:-}" ]]; then
   if [[ -n "${WAYLAND_DISPLAY:-}" || "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then

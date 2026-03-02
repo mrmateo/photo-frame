@@ -83,6 +83,8 @@ Default checked-in profile is X11 for user `pi`:
 - `DISPLAY=:0`
 - `XAUTHORITY=/home/pi/.Xauthority`
 - `QT_QPA_PLATFORM=xcb`
+- `QSG_RENDER_LOOP=basic`
+- `QSG_RHI_BACKEND=opengl`
 
 `APP_DIR` and `CONFIG_PATH` default in `deploy/run_photo_frame.sh`, so `/etc/default/photo_frame` is only needed for overrides.
 Use `/etc/default/photo_frame` to override environment variables without editing the unit file.
