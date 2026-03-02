@@ -16,20 +16,12 @@ Window {
     readonly property bool isPortrait: root.height >= root.width
     readonly property bool useQrcAssets: root.backend.weatherIcon.indexOf("qrc:/") === 0
     readonly property int actionButtonSize: root.isPortrait ? 50 : 42
-    readonly property int actionIconSize: root.isPortrait ? 22 : 18
+    readonly property int actionIconSize: root.isPortrait ? 24 : 20
     readonly property int actionBusySize: root.isPortrait ? 28 : 24
 
-    property bool primaryPhotoActive: true
-    property string pendingPhotoSource: ""
+    property string backendImageSource: root.backend.currentImage
+    property string requestedPhotoSource: ""
     property bool photoTransitionRunning: false
-
-    function activePhoto() {
-        return primaryPhotoActive ? photoPrimary : photoSecondary
-    }
-
-    function inactivePhoto() {
-        return primaryPhotoActive ? photoSecondary : photoPrimary
-    }
 
     function uiIconSource(fileName) {
         if (useQrcAssets) {
@@ -40,143 +32,107 @@ Window {
 
     function queuePhotoSource(nextSource) {
         if (!nextSource || nextSource.length === 0) {
-            pendingPhotoSource = ""
+            requestedPhotoSource = ""
             photoTransitionRunning = false
             crossFade.stop()
-            photoPrimary.source = ""
-            photoSecondary.source = ""
-            photoPrimary.opacity = 0
-            photoSecondary.opacity = 0
+            photoCurrent.source = ""
+            photoNext.source = ""
+            photoCurrent.opacity = 0
+            photoNext.opacity = 0
             return
         }
 
-        const currentPhoto = activePhoto()
-        if (currentPhoto.source === nextSource && currentPhoto.opacity > 0.99) {
-            pendingPhotoSource = ""
+        requestedPhotoSource = nextSource
+
+        if (photoTransitionRunning) {
             return
         }
 
-        pendingPhotoSource = nextSource
-        loadPendingPhoto()
-    }
-
-    function loadPendingPhoto() {
-        if (photoTransitionRunning || pendingPhotoSource.length === 0) {
+        if (photoCurrent.source === nextSource && photoCurrent.opacity > 0.99) {
             return
         }
 
-        const currentPhoto = activePhoto()
-        const nextPhoto = inactivePhoto()
-
-        if (nextPhoto.source !== pendingPhotoSource) {
-            nextPhoto.opacity = 0
-            nextPhoto.source = pendingPhotoSource
+        if (photoNext.source !== nextSource) {
+            photoNext.opacity = 0
+            photoNext.source = nextSource
         }
 
-        if (nextPhoto.status === Image.Ready) {
-            if (!currentPhoto.source || currentPhoto.opacity <= 0.01) {
-                swapPhotoImmediately(nextPhoto)
-            } else {
-                startPhotoCrossFade()
-            }
-        } else if (nextPhoto.status === Image.Error) {
-            pendingPhotoSource = ""
+        if (photoNext.status === Image.Ready) {
+            startPhotoTransition()
         }
     }
 
-    function handlePhotoStatusChanged(photoItem) {
-        const nextPhoto = inactivePhoto()
-        if (photoItem !== nextPhoto || photoTransitionRunning || pendingPhotoSource.length === 0) {
-            return
-        }
-        if (photoItem.source !== pendingPhotoSource) {
+    function startPhotoTransition() {
+        if (photoTransitionRunning || requestedPhotoSource.length === 0) {
             return
         }
 
-        if (photoItem.status === Image.Ready) {
-            if (!activePhoto().source || activePhoto().opacity <= 0.01) {
-                swapPhotoImmediately(photoItem)
-            } else {
-                startPhotoCrossFade()
-            }
-        } else if (photoItem.status === Image.Error) {
-            pendingPhotoSource = ""
+        if (photoNext.status !== Image.Ready) {
+            return
         }
-    }
 
-    function swapPhotoImmediately(readyPhoto) {
-        const otherPhoto = readyPhoto === photoPrimary ? photoSecondary : photoPrimary
-        readyPhoto.opacity = 1
-        otherPhoto.opacity = 0
-        primaryPhotoActive = readyPhoto === photoPrimary
-        pendingPhotoSource = ""
-    }
-
-    function startPhotoCrossFade() {
-        const currentPhoto = activePhoto()
-        const nextPhoto = inactivePhoto()
-
-        if (nextPhoto.status !== Image.Ready || pendingPhotoSource.length === 0) {
+        if (!photoCurrent.source || photoCurrent.opacity <= 0.01) {
+            photoCurrent.source = photoNext.source
+            photoCurrent.opacity = 1
+            photoNext.opacity = 0
+            photoNext.source = ""
             return
         }
 
         photoTransitionRunning = true
-        fadeOutAnimation.target = currentPhoto
-        fadeOutAnimation.from = currentPhoto.opacity
+        photoNext.opacity = 0
+        fadeOutAnimation.from = photoCurrent.opacity
         fadeOutAnimation.to = 0.0
-        fadeInAnimation.target = nextPhoto
-        fadeInAnimation.from = nextPhoto.opacity
+        fadeInAnimation.from = photoNext.opacity
         fadeInAnimation.to = 1.0
-        pendingPhotoSource = ""
         crossFade.restart()
     }
 
-    Connections {
-        target: root.backend
+    onBackendImageSourceChanged: root.queuePhotoSource(backendImageSource)
 
-        function onCurrentImageChanged() {
-            root.queuePhotoSource(root.backend.currentImage)
+    Component.onCompleted: root.queuePhotoSource(backendImageSource)
+
+    Image {
+        id: photoCurrent
+        anchors.fill: parent
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: true
+        retainWhileLoading: true
+        sourceSize.width: Math.max(1, root.width)
+        sourceSize.height: Math.max(1, root.height)
+        opacity: 0
+        z: -1
+    }
+
+    Image {
+        id: photoNext
+        anchors.fill: parent
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: true
+        retainWhileLoading: true
+        sourceSize.width: Math.max(1, root.width)
+        sourceSize.height: Math.max(1, root.height)
+        opacity: 0
+        z: 0
+
+        onStatusChanged: {
+            if (photoTransitionRunning || requestedPhotoSource.length === 0) {
+                return
+            }
+            if (photoNext.status === Image.Ready) {
+                startPhotoTransition()
+            }
         }
-    }
-
-    Component.onCompleted: root.queuePhotoSource(root.backend.currentImage)
-
-    Image {
-        id: photoPrimary
-        anchors.fill: parent
-        fillMode: Image.PreserveAspectCrop
-        asynchronous: true
-        cache: false
-        retainWhileLoading: true
-        sourceSize.width: Math.max(1, root.width)
-        sourceSize.height: Math.max(1, root.height)
-        opacity: 0
-        z: root.primaryPhotoActive ? -1 : -2
-
-        onStatusChanged: root.handlePhotoStatusChanged(photoPrimary)
-    }
-
-    Image {
-        id: photoSecondary
-        anchors.fill: parent
-        fillMode: Image.PreserveAspectCrop
-        asynchronous: true
-        cache: false
-        retainWhileLoading: true
-        sourceSize.width: Math.max(1, root.width)
-        sourceSize.height: Math.max(1, root.height)
-        opacity: 0
-        z: root.primaryPhotoActive ? -2 : -1
-
-        onStatusChanged: root.handlePhotoStatusChanged(photoSecondary)
     }
 
     ParallelAnimation {
         id: crossFade
-        running: false
 
         NumberAnimation {
             id: fadeOutAnimation
+            target: photoCurrent
             property: "opacity"
             duration: 620
             easing.type: Easing.InOutQuad
@@ -184,15 +140,22 @@ Window {
 
         NumberAnimation {
             id: fadeInAnimation
+            target: photoNext
             property: "opacity"
             duration: 620
             easing.type: Easing.InOutQuad
         }
 
         onFinished: {
-            root.primaryPhotoActive = fadeInAnimation.target === photoPrimary
+            photoCurrent.source = photoNext.source
+            photoCurrent.opacity = 1
+            photoNext.opacity = 0
+            photoNext.source = ""
             root.photoTransitionRunning = false
-            root.loadPendingPhoto()
+
+            if (requestedPhotoSource.length > 0 && requestedPhotoSource !== photoCurrent.source) {
+                root.queuePhotoSource(requestedPhotoSource)
+            }
         }
     }
 
