@@ -1,0 +1,7 @@
+*.jpg
+*.pyc
+config.json
+photos_api*.json
+**DS_Store
+venv
+._*

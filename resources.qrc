@@ -1,0 +1,16 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="qml/Main.qml">qml/Main.qml</file>
+    <file alias="assets/weather/cloud.png">assets/weather/cloud.png</file>
+    <file alias="assets/weather/fog.png">assets/weather/fog.png</file>
+    <file alias="assets/weather/heavy_rain.png">assets/weather/heavy_rain.png</file>
+    <file alias="assets/weather/mix.png">assets/weather/mix.png</file>
+    <file alias="assets/weather/partly_cloudy.png">assets/weather/partly_cloudy.png</file>
+    <file alias="assets/weather/rain.png">assets/weather/rain.png</file>
+    <file alias="assets/weather/snow.png">assets/weather/snow.png</file>
+    <file alias="assets/weather/storm.png">assets/weather/storm.png</file>
+    <file alias="assets/weather/sun.png">assets/weather/sun.png</file>
+    <file alias="assets/weather/unknown.png">assets/weather/unknown.png</file>
+    <file alias="assets/weather/wind.png">assets/weather/wind.png</file>
+  </qresource>
+</RCC>

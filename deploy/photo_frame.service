@@ -1,0 +1,22 @@
+[Unit]
+Description=Digital Photo Frame
+After=network-online.target graphical.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/photo-frame
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+Environment=QT_QPA_PLATFORM=xcb
+EnvironmentFile=-/etc/default/photo_frame
+ExecStart=/opt/photo-frame/deploy/run_photo_frame.sh
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target

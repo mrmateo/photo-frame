@@ -1,0 +1,22 @@
+[project]
+name = "photo-frame"
+version = "0.2.0"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.8.0",
+  "requests>=2.32.0",
+  "Pillow>=11.0.0",
+  "pillow-heif>=0.22.0",
+]
+
+[tool.pyside6-project]
+files = [
+  "main.py",
+  "resources.qrc",
+  "qml/Main.qml",
+  "photoframe/__init__.py",
+  "photoframe/config.py",
+  "photoframe/controller.py",
+  "photoframe/photo_sync_service.py",
+  "photoframe/weather_service.py",
+]
