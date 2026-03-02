@@ -19,8 +19,8 @@ Window {
     readonly property int actionIconSize: root.isPortrait ? 24 : 20
     readonly property int actionBusySize: root.isPortrait ? 28 : 24
 
-    property string requestedPhotoSource: ""
-    property bool photoTransitionRunning: false
+    property string lastAnimatedSource: ""
+    property bool fadePending: false
 
     function uiIconSource(fileName) {
         if (useQrcAssets) {
@@ -29,128 +29,64 @@ Window {
         return Qt.resolvedUrl("../assets/ui/" + fileName)
     }
 
-    function queuePhotoSource(nextSource) {
-        if (!nextSource || nextSource.length === 0) {
-            requestedPhotoSource = ""
-            photoTransitionRunning = false
-            fadeInAnimation.stop()
-            photoCurrent.source = ""
-            photoNext.source = ""
-            photoCurrent.opacity = 0
-            photoNext.opacity = 0
-            return
-        }
-
-        requestedPhotoSource = nextSource
-
-        if (photoTransitionRunning) {
-            return
-        }
-
-        if (photoCurrent.source === nextSource && photoCurrent.opacity > 0.99) {
-            requestedPhotoSource = ""
-            return
-        }
-
-        if (photoNext.source !== nextSource) {
-            photoNext.opacity = 0
-            photoNext.source = nextSource
-        }
-
-        if (photoNext.status === Image.Ready) {
-            startPhotoTransition()
-        }
-    }
-
-    function startPhotoTransition() {
-        if (photoTransitionRunning || requestedPhotoSource.length === 0) {
-            return
-        }
-
-        if (photoNext.status !== Image.Ready) {
-            return
-        }
-
-        if (!photoCurrent.source || photoCurrent.opacity <= 0.01) {
-            photoCurrent.source = photoNext.source
-            photoCurrent.opacity = 1
-            photoNext.opacity = 0
-            photoNext.source = ""
-            requestedPhotoSource = ""
-            return
-        }
-
-        photoTransitionRunning = true
-        photoNext.opacity = 0
-        fadeInAnimation.from = 0.0
-        fadeInAnimation.to = 1.0
-        fadeInAnimation.restart()
-    }
-
-    Connections {
-        target: root.backend
-
-        function onCurrentImageChanged() {
-            root.queuePhotoSource(root.backend.currentImage)
-        }
-    }
-
-    Component.onCompleted: root.queuePhotoSource(root.backend.currentImage)
-
     Image {
-        id: photoCurrent
+        id: photo
         anchors.fill: parent
+        source: root.backend.currentImage
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
-        cache: true
+        cache: false
         retainWhileLoading: true
         sourceSize.width: Math.max(1, root.width)
         sourceSize.height: Math.max(1, root.height)
-        opacity: 0
-    }
+        opacity: source.length > 0 ? 1 : 0
 
-    Image {
-        id: photoNext
-        anchors.fill: parent
-        fillMode: Image.PreserveAspectCrop
-        asynchronous: true
-        cache: true
-        retainWhileLoading: true
-        sourceSize.width: Math.max(1, root.width)
-        sourceSize.height: Math.max(1, root.height)
-        opacity: 0
-        visible: photoTransitionRunning
-
-        onStatusChanged: {
-            if (photoTransitionRunning || requestedPhotoSource.length === 0) {
+        onSourceChanged: {
+            if (!source || source.length === 0) {
+                root.fadePending = false
+                root.lastAnimatedSource = ""
+                opacity = 0
                 return
             }
-            if (photoNext.status === Image.Ready) {
-                startPhotoTransition()
+
+            if (source === root.lastAnimatedSource) {
+                root.fadePending = false
+                return
+            }
+
+            root.fadePending = true
+            if (status === Image.Ready) {
+                opacity = 0
+                root.fadePending = false
+                root.lastAnimatedSource = source
+                fadeIn.restart()
+            }
+        }
+
+        onStatusChanged: {
+            if (!root.fadePending) {
+                return
+            }
+
+            if (status === Image.Ready) {
+                opacity = 0
+                root.fadePending = false
+                root.lastAnimatedSource = source
+                fadeIn.restart()
+            } else if (status === Image.Error) {
+                root.fadePending = false
             }
         }
     }
 
     NumberAnimation {
-        id: fadeInAnimation
-        target: photoNext
+        id: fadeIn
+        target: photo
         property: "opacity"
+        from: 0.0
+        to: 1.0
         duration: 620
         easing.type: Easing.InOutQuad
-
-        onFinished: {
-            var pendingSource = requestedPhotoSource
-            photoCurrent.source = photoNext.source
-            photoCurrent.opacity = 1
-            photoNext.opacity = 0
-            photoNext.source = ""
-            root.photoTransitionRunning = false
-            requestedPhotoSource = ""
-
-            if (pendingSource.length > 0 && pendingSource !== photoCurrent.source) {
-                root.queuePhotoSource(pendingSource)
-            }
-        }
     }
 
     Rectangle {
