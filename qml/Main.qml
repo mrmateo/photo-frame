@@ -14,33 +14,71 @@ Window {
     title: "Photo Frame - PySide6 + Qt Quick"
 
     readonly property bool isPortrait: root.height >= root.width
+    property string displayedImage: root.backend.currentImage
+
+    function startPhotoTransition() {
+        if (fadeOut.running) {
+            return
+        }
+
+        if (!fadeIn.running && root.backend.currentImage === root.displayedImage) {
+            return
+        }
+
+        fadeIn.stop()
+        fadeOut.start()
+    }
 
     Image {
         id: photo
         anchors.fill: parent
-        source: root.backend.currentImage
+        source: root.displayedImage
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: false
-        retainWhileLoading: true
+        retainWhileLoading: false
         sourceSize.width: Math.max(1, root.width)
         sourceSize.height: Math.max(1, root.height)
         opacity: 1.0
         z: -1
 
-        onSourceChanged: {
-            opacity = 0.0
-            fadeIn.restart()
+        Component.onCompleted: {
+            if (!root.displayedImage) {
+                opacity = 0.0
+            }
         }
+    }
 
-        NumberAnimation {
-            id: fadeIn
-            target: photo
-            property: "opacity"
-            from: 0.0
-            to: 1.0
-            duration: 850
+    Connections {
+        target: root.backend
+
+        function onCurrentImageChanged() {
+            root.startPhotoTransition()
         }
+    }
+
+    NumberAnimation {
+        id: fadeOut
+        target: photo
+        property: "opacity"
+        to: 0.0
+        duration: 350
+        easing.type: Easing.InOutQuad
+        onFinished: {
+            root.displayedImage = root.backend.currentImage
+            if (root.displayedImage) {
+                fadeIn.start()
+            }
+        }
+    }
+
+    NumberAnimation {
+        id: fadeIn
+        target: photo
+        property: "opacity"
+        to: 1.0
+        duration: 500
+        easing.type: Easing.InOutQuad
     }
 
     Rectangle {
