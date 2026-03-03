@@ -15,8 +15,8 @@ Window {
 
     readonly property bool isPortrait: root.height >= root.width
     readonly property bool useQrcAssets: root.backend.weatherIcon.indexOf("qrc:/") === 0
-    readonly property int actionButtonSize: root.isPortrait ? 50 : 42
-    readonly property int actionIconSize: root.isPortrait ? 24 : 20
+    readonly property int actionButtonSize: root.isPortrait ? 60 : 50
+    readonly property int actionIconSize: root.isPortrait ? 29 : 24
     readonly property int actionBusySize: root.isPortrait ? 28 : 24
     property string displayedImage: ""
 
