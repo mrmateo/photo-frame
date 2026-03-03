@@ -12,5 +12,7 @@
     <file alias="assets/weather/sun.png">assets/weather/sun.png</file>
     <file alias="assets/weather/unknown.png">assets/weather/unknown.png</file>
     <file alias="assets/weather/wind.png">assets/weather/wind.png</file>
+    <file alias="assets/ui/shutdown.svg">assets/ui/shutdown.svg</file>
+    <file alias="assets/ui/sync.svg">assets/ui/sync.svg</file>
   </qresource>
 </RCC>
