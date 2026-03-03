@@ -14,7 +14,7 @@ Window {
     title: "Photo Frame - PySide6 + Qt Quick"
 
     readonly property bool isPortrait: root.height >= root.width
-    property string displayedImage: root.backend.currentImage
+    property string displayedImage: ""
 
     function startPhotoTransition() {
         if (fadeOut.running) {
@@ -43,9 +43,8 @@ Window {
         z: -1
 
         Component.onCompleted: {
-            if (!root.displayedImage) {
-                opacity = 0.0
-            }
+            root.displayedImage = root.backend.currentImage
+            opacity = root.displayedImage ? 1.0 : 0.0
         }
     }
 
