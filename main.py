@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import QCommandLineOption, QCommandLineParser, QCoreApplication, QStandardPaths, QTimer, Qt, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from photoframe.config import AppConfig
@@ -138,6 +138,7 @@ def main() -> int:
     )
 
     app = QGuiApplication(sys.argv)
+    app.setOverrideCursor(QCursor(Qt.CursorShape.BlankCursor))
 
     parser, options = build_parser()
     parser.process(app)
@@ -199,6 +200,7 @@ def main() -> int:
         return 1
 
     app.aboutToQuit.connect(controller.stop)
+    app.aboutToQuit.connect(QGuiApplication.restoreOverrideCursor)
     QTimer.singleShot(0, controller.start)
 
     if auto_exit_seconds > 0:
