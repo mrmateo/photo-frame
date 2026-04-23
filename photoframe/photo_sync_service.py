@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ register_heif_opener()
 
 LOGGER = logging.getLogger(__name__)
 JPEG_EXTENSIONS = {'.jpg', '.jpeg'}
+MANIFEST_FILENAME = '.photo_frame_manifest.json'
 
 
 @dataclass
@@ -63,6 +65,89 @@ class PhotoSyncService:
     @staticmethod
     def to_local_jpg_name(original_file_name: str) -> str:
         return f'{Path(original_file_name).stem}.jpg'
+
+    @staticmethod
+    def _first_text_value(*values: object) -> str:
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ''
+
+    @staticmethod
+    def _extract_people(asset: dict[str, object]) -> list[str]:
+        people = asset.get('people')
+        if not isinstance(people, list):
+            return []
+
+        names: list[str] = []
+        seen_names: set[str] = set()
+        for person in people:
+            if not isinstance(person, dict) or person.get('isHidden') is True:
+                continue
+
+            raw_name = person.get('name')
+            if not isinstance(raw_name, str):
+                continue
+
+            name = raw_name.strip()
+            name_key = name.casefold()
+            if name and name_key not in seen_names:
+                names.append(name)
+                seen_names.add(name_key)
+        return names
+
+    @staticmethod
+    def _extract_location(exif_info: dict[str, object]) -> str:
+        parts = [
+            PhotoSyncService._first_text_value(exif_info.get('city')),
+            PhotoSyncService._first_text_value(exif_info.get('state')),
+            PhotoSyncService._first_text_value(exif_info.get('country')),
+        ]
+        return ', '.join(part for part in parts if part)
+
+    @classmethod
+    def _build_manifest_entry(
+        cls,
+        asset: dict[str, object],
+        local_filename: str,
+        album_name: str,
+    ) -> dict[str, object]:
+        exif_info = asset.get('exifInfo')
+        exif = exif_info if isinstance(exif_info, dict) else {}
+
+        return {
+            'asset_id': cls._first_text_value(asset.get('id')),
+            'original_filename': cls._first_text_value(asset.get('originalFileName')),
+            'local_filename': local_filename,
+            'taken_at': cls._first_text_value(
+                asset.get('localDateTime'),
+                exif.get('dateTimeOriginal'),
+                asset.get('fileCreatedAt'),
+                asset.get('createdAt'),
+            ),
+            'location': cls._extract_location(exif),
+            'album': album_name,
+            'people': cls._extract_people(asset),
+            'is_favorite': bool(asset.get('isFavorite')),
+        }
+
+    def _write_manifest(
+        self,
+        photos_path: Path,
+        album: dict[str, object],
+        entries: dict[str, dict[str, object]],
+    ) -> None:
+        manifest_path = photos_path / MANIFEST_FILENAME
+        temp_path = manifest_path.with_suffix('.tmp')
+        album_name = self._first_text_value(album.get('albumName'), album.get('name'))
+        payload = {
+            'version': 1,
+            'album': album_name,
+            'photos': entries,
+        }
+
+        temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding='utf-8')
+        temp_path.replace(manifest_path)
 
     @staticmethod
     def convert_to_jpeg(image_bytes: bytes, output_path: Path) -> None:
@@ -117,28 +202,40 @@ class PhotoSyncService:
         response.raise_for_status()
 
         album = response.json()
-        assets = album.get('assets', [])
+        if not isinstance(album, dict):
+            raise ValueError('Immich album response was not a JSON object.')
+
+        raw_assets = album.get('assets', [])
+        assets = [asset for asset in raw_assets if isinstance(asset, dict)] if isinstance(raw_assets, list) else []
         photos_path.mkdir(parents=True, exist_ok=True)
 
         summary = SyncSummary(remote_assets=len(assets))
+        album_name = self._first_text_value(album.get('albumName'), album.get('name'))
+        manifest_entries: dict[str, dict[str, object]] = {}
 
         expected_filenames = {
-            self.to_local_jpg_name(asset['originalFileName'])
+            self.to_local_jpg_name(original_file_name)
             for asset in assets
-            if 'originalFileName' in asset
+            if isinstance(original_file_name := asset.get('originalFileName'), str)
+            and original_file_name.strip()
         }
 
         for asset in assets:
             original_file_name = asset.get('originalFileName')
             asset_id = asset.get('id')
 
-            if not original_file_name or not asset_id:
+            if not isinstance(original_file_name, str) or not original_file_name.strip() or not asset_id:
                 self.logger.warning('Skipping invalid asset: %s', repr(asset))
                 summary.skipped_invalid += 1
                 continue
 
             local_filename = self.to_local_jpg_name(original_file_name)
             local_path = photos_path / local_filename
+            manifest_entries[local_filename] = self._build_manifest_entry(
+                asset=asset,
+                local_filename=local_filename,
+                album_name=album_name,
+            )
 
             if local_path.exists():
                 summary.skipped_existing += 1
@@ -171,7 +268,13 @@ class PhotoSyncService:
                 self.logger.exception('Processing failed for %s', local_filename)
                 summary.failed += 1
 
-        existing_files = {entry.name for entry in photos_path.iterdir() if entry.is_file()}
+        self._write_manifest(photos_path=photos_path, album=album, entries=manifest_entries)
+
+        existing_files = {
+            entry.name
+            for entry in photos_path.iterdir()
+            if entry.is_file() and entry.suffix.lower() in JPEG_EXTENSIONS
+        }
         for filename in sorted(existing_files - expected_filenames):
             file_path = photos_path / filename
             try:

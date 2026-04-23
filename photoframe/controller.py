@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import json
 import logging
 from pathlib import Path
 import re
@@ -11,7 +12,7 @@ import subprocess
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 
 from .config import AppConfig
-from .photo_sync_service import PhotoSyncService
+from .photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
 from .weather_service import WeatherService
 
 LOGGER = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class PhotoFrameController(QObject):
     weatherIconChanged = Signal()
     syncStatusChanged = Signal()
     syncInProgressChanged = Signal()
+    currentPhotoDetailsChanged = Signal()
 
     syncProgressSignal = Signal(str)
     syncFinishedSignal = Signal(object, str)
@@ -85,9 +87,11 @@ class PhotoFrameController(QObject):
         self._weather_text = 'Weather loading...'
         self._weather_icon = self._resolve_weather_icon(None)
         self._sync_status = ''
+        self._current_photo_details = ''
 
         self._sync_in_progress = False
         self._weather_in_progress = False
+        self._photo_metadata: dict[str, object] = {}
 
         self._image_timer = QTimer(self)
         self._image_timer.timeout.connect(self._advance_image_timer)
@@ -150,6 +154,10 @@ class PhotoFrameController(QObject):
     def syncInProgress(self) -> bool:
         return self._sync_in_progress
 
+    @Property(str, notify=currentPhotoDetailsChanged)
+    def currentPhotoDetails(self) -> str:
+        return self._current_photo_details
+
     @Slot()
     def start(self) -> None:
         self.photos_path.mkdir(parents=True, exist_ok=True)
@@ -181,6 +189,7 @@ class PhotoFrameController(QObject):
         if self._current_image != image_url:
             self._current_image = image_url
             self.currentImageChanged.emit()
+        self._set_current_photo_details(self._format_photo_details(image_path))
 
     def _set_has_images(self, has_images: bool) -> None:
         if self._has_images != has_images:
@@ -221,6 +230,11 @@ class PhotoFrameController(QObject):
         if auto_clear_ms is not None and value:
             self._status_clear_timer.start(auto_clear_ms)
 
+    def _set_current_photo_details(self, value: str) -> None:
+        if self._current_photo_details != value:
+            self._current_photo_details = value
+            self.currentPhotoDetailsChanged.emit()
+
     def _clear_sync_status(self) -> None:
         self._set_sync_status('', auto_clear_ms=None)
 
@@ -229,6 +243,8 @@ class PhotoFrameController(QObject):
         self._set_sync_status(message, auto_clear_ms=None)
 
     def _reload_images(self, preserve_current: bool = True) -> None:
+        self._reload_photo_metadata()
+
         previous_path = None
         if preserve_current and self._images and self._current_image:
             previous_path = self._images[self._index]
@@ -259,6 +275,80 @@ class PhotoFrameController(QObject):
             self._index = min(self._index, len(images) - 1)
 
         self._set_current_image(images[self._index])
+
+    def _reload_photo_metadata(self) -> None:
+        manifest_path = self.photos_path / MANIFEST_FILENAME
+        if not manifest_path.exists():
+            self._photo_metadata = {}
+            return
+
+        try:
+            payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as error:
+            LOGGER.warning('Could not read photo metadata manifest %s: %s', manifest_path, error)
+            self._photo_metadata = {}
+            return
+
+        photos = payload.get('photos') if isinstance(payload, dict) else None
+        self._photo_metadata = photos if isinstance(photos, dict) else {}
+
+    @staticmethod
+    def _metadata_text(value: object) -> str:
+        return value.strip() if isinstance(value, str) else ''
+
+    @staticmethod
+    def _format_people(people: object) -> str:
+        if not isinstance(people, list):
+            return ''
+
+        names = [name.strip() for name in people if isinstance(name, str) and name.strip()]
+        if not names:
+            return ''
+
+        visible_names = names[:4]
+        suffix = f' +{len(names) - 4}' if len(names) > 4 else ''
+        return f"With: {', '.join(visible_names)}{suffix}"
+
+    @staticmethod
+    def _format_taken_at(raw_value: object) -> str:
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            return ''
+
+        normalized = raw_value.strip().replace('Z', '+00:00')
+        try:
+            taken_at = datetime.fromisoformat(normalized)
+        except ValueError:
+            return raw_value.strip()
+
+        return taken_at.strftime('%B %d, %Y').replace(' 0', ' ')
+
+    def _format_photo_details(self, image_path: Path | None) -> str:
+        if image_path is None:
+            return ''
+
+        metadata = self._photo_metadata.get(image_path.name)
+        if not isinstance(metadata, dict):
+            return image_path.name
+
+        lines = [
+            self._format_taken_at(metadata.get('taken_at')),
+            self._metadata_text(metadata.get('location')),
+            self._format_people(metadata.get('people')),
+        ]
+
+        album = self._metadata_text(metadata.get('album'))
+        if album:
+            lines.append(f'Album: {album}')
+
+        if metadata.get('is_favorite') is True:
+            lines.append('Favorite')
+
+        original_filename = self._metadata_text(metadata.get('original_filename'))
+        if original_filename and original_filename != image_path.name:
+            lines.append(original_filename)
+
+        visible_lines = [line for line in lines if line]
+        return '\n'.join(visible_lines) if visible_lines else image_path.name
 
     def _update_clock(self) -> None:
         now = datetime.now()

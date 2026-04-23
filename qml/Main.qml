@@ -18,7 +18,9 @@ Window {
     readonly property int actionButtonSize: root.isPortrait ? 60 : 50
     readonly property int actionIconSize: root.isPortrait ? 29 : 24
     readonly property int actionBusySize: root.isPortrait ? 28 : 24
+    readonly property real metadataTapHeightRatio: 0.24
     property string displayedImage: ""
+    property bool metadataVisible: false
 
     function uiIconSource(fileName) {
         if (useQrcAssets) {
@@ -38,6 +40,15 @@ Window {
 
         fadeIn.stop()
         fadeOut.start()
+    }
+
+    function showPhotoDetails() {
+        if (root.backend.currentPhotoDetails.length === 0) {
+            return
+        }
+
+        root.metadataVisible = true
+        metadataHideTimer.restart()
     }
 
     Image {
@@ -64,7 +75,17 @@ Window {
 
         function onCurrentImageChanged() {
             root.startPhotoTransition()
+            if (root.metadataVisible) {
+                metadataHideTimer.restart()
+            }
         }
+    }
+
+    Timer {
+        id: metadataHideTimer
+        interval: 8000
+        repeat: false
+        onTriggered: root.metadataVisible = false
     }
 
     NumberAnimation {
@@ -110,7 +131,11 @@ Window {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen | PointerDevice.TouchPad
         gesturePolicy: TapHandler.ReleaseWithinBounds
         onTapped: (eventPoint) => {
-            if (eventPoint.position.x < root.width * 0.40) {
+            if (eventPoint.position.y < root.height * root.metadataTapHeightRatio
+                    && eventPoint.position.x > root.width * 0.18
+                    && eventPoint.position.x < root.width * 0.82) {
+                root.showPhotoDetails()
+            } else if (eventPoint.position.x < root.width * 0.40) {
                 root.backend.previousImage()
             } else if (eventPoint.position.x > root.width * 0.60) {
                 root.backend.nextImage()
@@ -129,12 +154,49 @@ Window {
         color: "#73232d3f"
         visible: root.backend.syncStatus.length > 0
         opacity: visible ? 1 : 0
+        z: 2
 
         Text {
             anchors.centerIn: parent
             text: root.backend.syncStatus
             color: "#e7f1ff"
             font.pixelSize: 19
+        }
+    }
+
+    Rectangle {
+        id: metadataPanel
+        width: root.isPortrait ? Math.min(root.width * 0.84, 620) : Math.min(root.width * 0.56, 640)
+        height: Math.min(metadataText.implicitHeight + 30, root.height * 0.36)
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: statusPanel.visible ? 78 : 18
+        radius: 14
+        color: "#82101820"
+        border.width: 1
+        border.color: "#54e9f1ff"
+        clip: true
+        visible: opacity > 0
+        opacity: root.metadataVisible && root.backend.currentPhotoDetails.length > 0 ? 1 : 0
+        z: 1
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 180
+                easing.type: Easing.InOutQuad
+            }
+        }
+
+        Text {
+            id: metadataText
+            anchors.fill: parent
+            anchors.margins: 15
+            text: root.backend.currentPhotoDetails
+            color: "#f5fbff"
+            font.pixelSize: root.isPortrait ? 23 : 21
+            lineHeight: 1.12
+            wrapMode: Text.WordWrap
+            elide: Text.ElideRight
         }
     }
 
