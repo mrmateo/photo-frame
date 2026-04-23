@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlencode
 
 import requests
 from PIL import Image
@@ -79,9 +80,13 @@ class PhotoSyncService:
         if not isinstance(people, list):
             return []
 
+        return PhotoSyncService._extract_people_from_person_items(people)
+
+    @staticmethod
+    def _extract_people_from_person_items(items: list[object]) -> list[str]:
         names: list[str] = []
         seen_names: set[str] = set()
-        for person in people:
+        for person in items:
             if not isinstance(person, dict) or person.get('isHidden') is True:
                 continue
 
@@ -95,6 +100,22 @@ class PhotoSyncService:
                 names.append(name)
                 seen_names.add(name_key)
         return names
+
+    @staticmethod
+    def _extract_people_from_faces(faces: object) -> list[str]:
+        if not isinstance(faces, list):
+            return []
+
+        people: list[object] = []
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
+
+            person = face.get('person')
+            if isinstance(person, dict):
+                people.append(person)
+
+        return PhotoSyncService._extract_people_from_person_items(people)
 
     @staticmethod
     def _extract_location(exif_info: dict[str, object]) -> str:
@@ -111,6 +132,7 @@ class PhotoSyncService:
         asset: dict[str, object],
         local_filename: str,
         album_name: str,
+        people: list[str] | None = None,
     ) -> dict[str, object]:
         exif_info = asset.get('exifInfo')
         exif = exif_info if isinstance(exif_info, dict) else {}
@@ -127,7 +149,7 @@ class PhotoSyncService:
             ),
             'location': cls._extract_location(exif),
             'album': album_name,
-            'people': cls._extract_people(asset),
+            'people': people if people is not None else cls._extract_people(asset),
             'is_favorite': bool(asset.get('isFavorite')),
         }
 
@@ -178,6 +200,24 @@ class PhotoSyncService:
             raise last_error
         raise RequestException('GET request failed without exception details')
 
+    def fetch_face_people(
+        self,
+        immich_server_url: str,
+        asset_id: str,
+        headers: dict[str, str],
+    ) -> list[str]:
+        query_string = urlencode({'id': asset_id})
+        response = self.get_with_retries(
+            url=f'{immich_server_url}/api/faces?{query_string}',
+            headers=headers,
+            timeout=self.request_timeout_seconds,
+        )
+        if response.status_code in {401, 403}:
+            raise PermissionError('API key does not have access to read face metadata.')
+
+        response.raise_for_status()
+        return self._extract_people_from_faces(response.json())
+
     def sync_photos(
         self,
         config: AppConfig,
@@ -212,6 +252,7 @@ class PhotoSyncService:
         summary = SyncSummary(remote_assets=len(assets))
         album_name = self._first_text_value(album.get('albumName'), album.get('name'))
         manifest_entries: dict[str, dict[str, object]] = {}
+        face_metadata_available = True
 
         expected_filenames = {
             self.to_local_jpg_name(original_file_name)
@@ -231,10 +272,35 @@ class PhotoSyncService:
 
             local_filename = self.to_local_jpg_name(original_file_name)
             local_path = photos_path / local_filename
+            people = self._extract_people(asset)
+            if not people and face_metadata_available:
+                try:
+                    people = self.fetch_face_people(
+                        immich_server_url=immich_server_url,
+                        asset_id=str(asset_id),
+                        headers=headers,
+                    )
+                except PermissionError as error:
+                    face_metadata_available = False
+                    self.logger.warning('Face metadata disabled: %s', error)
+                except RequestException as error:
+                    self.logger.warning(
+                        'Face metadata request failed for %s: %s',
+                        local_filename,
+                        error,
+                    )
+                except (ValueError, TypeError) as error:
+                    self.logger.warning(
+                        'Could not parse face metadata for %s: %s',
+                        local_filename,
+                        error,
+                    )
+
             manifest_entries[local_filename] = self._build_manifest_entry(
                 asset=asset,
                 local_filename=local_filename,
                 album_name=album_name,
+                people=people,
             )
 
             if local_path.exists():
