@@ -1,17 +1,17 @@
 <RCC>
   <qresource prefix="/">
     <file alias="qml/Main.qml">qml/Main.qml</file>
-    <file alias="assets/weather/cloud.png">assets/weather/cloud.png</file>
-    <file alias="assets/weather/fog.png">assets/weather/fog.png</file>
-    <file alias="assets/weather/heavy_rain.png">assets/weather/heavy_rain.png</file>
-    <file alias="assets/weather/mix.png">assets/weather/mix.png</file>
-    <file alias="assets/weather/partly_cloudy.png">assets/weather/partly_cloudy.png</file>
-    <file alias="assets/weather/rain.png">assets/weather/rain.png</file>
-    <file alias="assets/weather/snow.png">assets/weather/snow.png</file>
-    <file alias="assets/weather/storm.png">assets/weather/storm.png</file>
-    <file alias="assets/weather/sun.png">assets/weather/sun.png</file>
-    <file alias="assets/weather/unknown.png">assets/weather/unknown.png</file>
-    <file alias="assets/weather/wind.png">assets/weather/wind.png</file>
+    <file alias="assets/weather/cloud.svg">assets/weather/cloud.svg</file>
+    <file alias="assets/weather/fog.svg">assets/weather/fog.svg</file>
+    <file alias="assets/weather/heavy_rain.svg">assets/weather/heavy_rain.svg</file>
+    <file alias="assets/weather/mix.svg">assets/weather/mix.svg</file>
+    <file alias="assets/weather/partly_cloudy.svg">assets/weather/partly_cloudy.svg</file>
+    <file alias="assets/weather/rain.svg">assets/weather/rain.svg</file>
+    <file alias="assets/weather/snow.svg">assets/weather/snow.svg</file>
+    <file alias="assets/weather/storm.svg">assets/weather/storm.svg</file>
+    <file alias="assets/weather/sun.svg">assets/weather/sun.svg</file>
+    <file alias="assets/weather/unknown.svg">assets/weather/unknown.svg</file>
+    <file alias="assets/weather/wind.svg">assets/weather/wind.svg</file>
     <file alias="assets/ui/shutdown.svg">assets/ui/shutdown.svg</file>
     <file alias="assets/ui/sync.svg">assets/ui/sync.svg</file>
   </qresource>

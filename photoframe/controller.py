@@ -14,34 +14,11 @@ from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from .config import AppConfig
 from .photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
 from .weather_service import WeatherService
+from .weather_types import UNKNOWN_WEATHER_ICON_KEY, WEATHER_ICON_EXTENSION, weather_icon_key
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 SYNC_STATUS_CLEAR_MS = 10_000
-
-WEATHER_ICON_KEYS = {
-    'sunny': 'sun',
-    'clear': 'sun',
-    'cloudy': 'cloud',
-    'partlycloudy': 'partly_cloudy',
-    'mostlycloudy': 'cloud',
-    'overcast': 'cloud',
-    'rain': 'rain',
-    'lightrain': 'rain',
-    'heavyrain': 'heavy_rain',
-    'showers': 'rain',
-    'drizzle': 'rain',
-    'thunderstorm': 'storm',
-    'thunder': 'storm',
-    'snow': 'snow',
-    'lightsnow': 'snow',
-    'heavysnow': 'snow',
-    'blizzard': 'snow',
-    'fog': 'fog',
-    'haze': 'fog',
-    'windy': 'wind',
-    'rainandsnow': 'mix',
-}
 
 
 class PhotoFrameController(QObject):
@@ -508,28 +485,20 @@ class PhotoFrameController(QObject):
         return f"Sync complete: {', '.join(changes)}."
 
     def _resolve_weather_icon_key(self, condition: str | None) -> str:
-        condition_lower = condition.lower() if condition else ''
-
-        if condition_lower in WEATHER_ICON_KEYS:
-            return WEATHER_ICON_KEYS[condition_lower]
-
-        for key, icon_key in WEATHER_ICON_KEYS.items():
-            if key in condition_lower:
-                return icon_key
-
-        return 'unknown'
+        return weather_icon_key(condition)
 
     def _resolve_weather_icon(self, condition: str | None) -> str:
         icon_key = self._resolve_weather_icon_key(condition)
+        icon_filename = f'{icon_key}{WEATHER_ICON_EXTENSION}'
 
         if self.weather_icon_base_url.startswith('qrc:/'):
-            return f'{self.weather_icon_base_url}/{icon_key}.png'
+            return f'{self.weather_icon_base_url}/{icon_filename}'
 
-        icon_path = Path(self.weather_icon_base_url) / f'{icon_key}.png'
+        icon_path = Path(self.weather_icon_base_url) / icon_filename
         if icon_path.exists():
             return QUrl.fromLocalFile(str(icon_path)).toString()
 
-        unknown_path = Path(self.weather_icon_base_url) / 'unknown.png'
+        unknown_path = Path(self.weather_icon_base_url) / f'{UNKNOWN_WEATHER_ICON_KEY}{WEATHER_ICON_EXTENSION}'
         if unknown_path.exists():
             return QUrl.fromLocalFile(str(unknown_path)).toString()
         return ''

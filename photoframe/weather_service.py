@@ -7,19 +7,9 @@ from dataclasses import dataclass
 import requests
 
 from .config import AppConfig
+from .weather_types import format_weather_condition
 
 LOGGER = logging.getLogger(__name__)
-
-FRIENDLY_WEATHER_NAMES = {
-    'partlycloudy': 'Partly Cloudy',
-    'mostlycloudy': 'Mostly Cloudy',
-    'lightrain': 'Light Rain',
-    'heavyrain': 'Heavy Rain',
-    'thunderstorm': 'Thunderstorm',
-    'lightsnow': 'Light Snow',
-    'heavysnow': 'Heavy Snow',
-    'rainandsnow': 'Rain and Snow',
-}
 
 
 @dataclass(slots=True)
@@ -42,14 +32,7 @@ class WeatherService:
         self.retry_backoff_base_seconds = retry_backoff_base_seconds
 
     def format_weather_condition(self, condition: str) -> str:
-        if not condition:
-            return 'Unknown'
-
-        normalized = condition.lower().replace('-', '').replace('_', '')
-        if normalized in FRIENDLY_WEATHER_NAMES:
-            return FRIENDLY_WEATHER_NAMES[normalized]
-
-        return condition.replace('_', ' ').replace('-', ' ').title()
+        return format_weather_condition(condition)
 
     def fetch_weather(self, config: AppConfig) -> WeatherSnapshot:
         if not config.can_fetch_weather:
@@ -68,7 +51,7 @@ class WeatherService:
 
                 temperature = round(data['attributes']['temperature'])
                 condition = str(data['state'])
-                weather = self.format_weather_condition(condition)
+                weather = format_weather_condition(condition)
                 return WeatherSnapshot(text=f'{temperature} F  |  {weather}', condition=condition)
             except (requests.RequestException, ValueError, KeyError, TypeError) as error:
                 last_error = error

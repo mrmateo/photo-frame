@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.VectorImage
 
 Window {
     id: root
@@ -233,11 +234,12 @@ Window {
                 Layout.fillWidth: true
                 spacing: root.isPortrait ? 8 : 10
 
-                Image {
+                VectorImage {
                     source: root.backend.weatherIcon
                     Layout.preferredWidth: root.isPortrait ? 38 : 40
                     Layout.preferredHeight: root.isPortrait ? 38 : 40
-                    fillMode: Image.PreserveAspectFit
+                    fillMode: VectorImage.PreserveAspectFit
+                    animations.loops: Animation.Infinite
                 }
 
                 Text {
