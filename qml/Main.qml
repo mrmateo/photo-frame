@@ -19,6 +19,9 @@ Window {
     readonly property int actionIconSize: root.isPortrait ? 29 : 24
     readonly property int actionBusySize: root.isPortrait ? 28 : 24
     readonly property real metadataTapHeightRatio: 0.24
+    readonly property real overlayWidth: Math.min(root.width * 0.72, 760)
+    readonly property int overlayRadius: 14
+    readonly property color overlayColor: "#73232d3f"
     property string displayedImage: ""
     property bool metadataVisible: false
 
@@ -38,6 +41,8 @@ Window {
             return
         }
 
+        metadataHideTimer.stop()
+        root.metadataVisible = false
         fadeIn.stop()
         fadeOut.start()
     }
@@ -75,9 +80,6 @@ Window {
 
         function onCurrentImageChanged() {
             root.startPhotoTransition()
-            if (root.metadataVisible) {
-                metadataHideTimer.restart()
-            }
         }
     }
 
@@ -145,15 +147,14 @@ Window {
 
     Rectangle {
         id: statusPanel
-        width: Math.min(root.width * 0.72, 760)
+        width: root.overlayWidth
         height: 50
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: 14
-        radius: 14
-        color: "#73232d3f"
+        radius: root.overlayRadius
+        color: root.overlayColor
         visible: root.backend.syncStatus.length > 0
-        opacity: visible ? 1 : 0
         z: 2
 
         Text {
@@ -166,17 +167,14 @@ Window {
 
     Rectangle {
         id: metadataPanel
-        width: root.isPortrait ? Math.min(root.width * 0.84, 620) : Math.min(root.width * 0.56, 640)
+        width: root.overlayWidth
         height: Math.min(metadataText.implicitHeight + 30, root.height * 0.36)
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: statusPanel.visible ? 78 : 18
-        radius: 14
-        color: "#82101820"
-        border.width: 1
-        border.color: "#54e9f1ff"
+        radius: root.overlayRadius
+        color: root.overlayColor
         clip: true
-        visible: opacity > 0
         opacity: root.metadataVisible && root.backend.currentPhotoDetails.length > 0 ? 1 : 0
         z: 1
 

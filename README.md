@@ -8,8 +8,10 @@ This implementation is structured around Qt/PySide deployment guidance:
 
 ## Included behavior
 - Full-screen slideshow with edge tap navigation.
+- Top-center tap photo metadata overlay with date, location, album,
+  favorite state, filename, and tagged people when available.
 - Fade transitions and responsive info panel layout.
-- Immich photo sync service (download, convert, stale cleanup).
+- Immich photo sync service (download, convert, metadata manifest, stale cleanup).
 - Home Assistant weather polling service with retries.
 - Hourly sync/weather timers and per-second clock updates.
 - Manual sync + shutdown buttons.
@@ -30,6 +32,13 @@ This implementation is structured around Qt/PySide deployment guidance:
 Optional:
 - `shutdown_command`: command array used by shutdown button.
   - Example: `["systemctl", "poweroff"]`
+
+Recommended Immich API key permissions:
+- `album.read`: read the configured album and its asset list.
+- `asset.download`: download each original image.
+- `face.read`: optional but recommended for tagged people. The app first uses
+  people metadata from the album response when present, then falls back to
+  `GET /api/faces?id=<asset_id>` for names when the album payload omits them.
 
 Config lookup order at runtime:
 1. `--config <path>`
@@ -100,6 +109,8 @@ Override by setting `QT_QPA_PLATFORM` in `/etc/default/photo_frame`.
 ## Notes
 - If `rc_resources.py` is missing, app falls back to filesystem QML/assets and logs a warning.
 - Logs are written to `QStandardPaths.AppDataLocation/logs/photo_frame.log`.
+- Synced photo metadata is stored beside the downloaded photos in `.photo_frame_manifest.json`.
+- Stale cleanup only removes local `.jpg`/`.jpeg` files that are no longer present in the configured Immich album.
 
 ## Collect Raspberry Pi diagnostics
 To collect environment details for deployment tuning:
