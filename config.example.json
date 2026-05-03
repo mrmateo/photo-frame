@@ -7,5 +7,7 @@
   "local_folder": "photos",
   "shutdown_command": ["systemctl", "poweroff"],
   "image_cycle_seconds": 15,
-  "hourly_interval_seconds": 3600
+  "hourly_interval_seconds": 3600,
+  "touch_invert_x": false,
+  "touch_invert_y": false
 }
