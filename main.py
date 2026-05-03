@@ -52,6 +52,23 @@ def parse_auto_exit_seconds(raw_value: str) -> int:
         raise ValueError('--auto-exit-seconds must be an integer value') from error
 
 
+def parse_window_size(raw_value: str) -> tuple[int, int]:
+    normalized = (raw_value or '1280x720').strip().lower().replace(',', 'x')
+    parts = normalized.split('x', maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError('--size must use WIDTHxHEIGHT, for example 1280x720')
+
+    try:
+        width = int(parts[0])
+        height = int(parts[1])
+    except ValueError as error:
+        raise ValueError('--size must use integer dimensions, for example 1280x720') from error
+
+    if width < 320 or height < 240:
+        raise ValueError('--size must be at least 320x240')
+    return width, height
+
+
 def resolve_config_path(explicit_path: str, demo_mode: bool) -> Path | None:
     if explicit_path:
         candidate = Path(explicit_path).expanduser().resolve()
@@ -114,17 +131,31 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
         'seconds',
         '0',
     )
+    windowed_option = QCommandLineOption(
+        ['windowed'],
+        'Run in a normal desktop window instead of fullscreen.',
+    )
+    size_option = QCommandLineOption(
+        ['size'],
+        'Window size for --windowed runs, formatted WIDTHxHEIGHT.',
+        'size',
+        '1280x720',
+    )
     verbose_option = QCommandLineOption(['verbose'], 'Enable console logging.')
 
     parser.addOption(config_option)
     parser.addOption(demo_mode_option)
     parser.addOption(auto_exit_option)
+    parser.addOption(windowed_option)
+    parser.addOption(size_option)
     parser.addOption(verbose_option)
 
     return parser, {
         'config': config_option,
         'demo': demo_mode_option,
         'auto_exit': auto_exit_option,
+        'windowed': windowed_option,
+        'size': size_option,
         'verbose': verbose_option,
     }
 
@@ -138,7 +169,6 @@ def main() -> int:
     )
 
     app = QGuiApplication(sys.argv)
-    app.setOverrideCursor(QCursor(Qt.CursorShape.BlankCursor))
 
     parser, options = build_parser()
     parser.process(app)
@@ -148,14 +178,19 @@ def main() -> int:
     logger = logging.getLogger(__name__)
 
     demo_mode = parser.isSet(options['demo'])
+    windowed = parser.isSet(options['windowed'])
 
     try:
         auto_exit_seconds = parse_auto_exit_seconds(parser.value(options['auto_exit']))
+        window_width, window_height = parse_window_size(parser.value(options['size']))
         config_path = resolve_config_path(parser.value(options['config']), demo_mode=demo_mode)
         config = AppConfig.demo(APP_DIR) if config_path is None else AppConfig.from_file(config_path)
     except (ValueError, FileNotFoundError) as error:
         parser.showMessageAndExit(QCommandLineParser.MessageType.Error, str(error), 1)
         return 1
+
+    if not windowed:
+        app.setOverrideCursor(QCursor(Qt.CursorShape.BlankCursor))
 
     use_qrc = load_qml_resources()
     if use_qrc:
@@ -192,7 +227,14 @@ def main() -> int:
         weather_icon_base_url=weather_icon_base,
         demo_mode=demo_mode,
     )
-    engine.setInitialProperties({'backend': controller})
+    engine.setInitialProperties(
+        {
+            'backend': controller,
+            'startFullScreen': not windowed,
+            'initialWidth': window_width,
+            'initialHeight': window_height,
+        }
+    )
     engine.load(qml_url)
 
     if not engine.rootObjects():

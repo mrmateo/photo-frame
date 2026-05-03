@@ -51,6 +51,10 @@ WEATHER_CONDITION_TYPES: dict[str, WeatherConditionType] = {
     'wind': WeatherConditionType(icon_key='wind'),
 }
 
+WEATHER_CONDITION_FALLBACKS = tuple(
+    sorted(WEATHER_CONDITION_TYPES.items(), key=lambda item: len(item[0]), reverse=True)
+)
+
 
 def normalize_weather_condition(condition: str | None) -> str:
     if not condition:
@@ -76,8 +80,7 @@ def weather_icon_key(condition: str | None) -> str:
     if normalized in WEATHER_CONDITION_TYPES:
         return WEATHER_CONDITION_TYPES[normalized].icon_key
 
-    sorted_condition_types = sorted(WEATHER_CONDITION_TYPES.items(), key=lambda item: len(item[0]), reverse=True)
-    for key, condition_type in sorted_condition_types:
+    for key, condition_type in WEATHER_CONDITION_FALLBACKS:
         if key in normalized:
             return condition_type.icon_key
 

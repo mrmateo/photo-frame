@@ -59,6 +59,31 @@ From repo root:
 Demo mode (no network/poweroff):
 - `QT_QPA_PLATFORM=offscreen venv/bin/python main.py --demo-mode --auto-exit-seconds 5`
 
+## Local simulator
+Use the simulator when you want to test UI/layout/controller changes on your
+workstation without pushing to the physical frame. It creates disposable sample
+photos and metadata under `.dev-simulator/`, then launches the same app in demo
+mode with network sync and shutdown disabled.
+The demo weather rotates through the bundled weather icons as photos advance,
+so it is useful for checking icon artwork and sizing too.
+
+From repo root:
+
+- `venv/bin/python scripts/run_local_simulator.py`
+
+Useful options:
+
+- `venv/bin/python scripts/run_local_simulator.py --size 720x1280`
+  - Test portrait layout.
+- `venv/bin/python scripts/run_local_simulator.py --reset`
+  - Regenerate simulator config/photos/metadata.
+- `venv/bin/python scripts/run_local_simulator.py --auto-exit-seconds 5`
+  - Run a short smoke check.
+
+You can also run the app directly in a desktop window:
+
+- `venv/bin/python main.py --config .dev-simulator/config.json --demo-mode --windowed --size 1280x720`
+
 ## Deployable package (pyside6-deploy)
 From repo root:
 

@@ -1,7 +1,9 @@
 *.jpg
 *.pyc
 config.json
+.dev-simulator/
 photos_api*.json
 **DS_Store
 venv
+.venv
 ._*

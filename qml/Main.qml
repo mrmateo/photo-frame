@@ -6,11 +6,14 @@ import QtQuick.VectorImage
 Window {
     id: root
     required property var backend
+    property bool startFullScreen: true
+    property int initialWidth: 1280
+    property int initialHeight: 720
 
-    width: 1280
-    height: 720
+    width: initialWidth
+    height: initialHeight
     visible: true
-    visibility: Window.FullScreen
+    visibility: startFullScreen ? Window.FullScreen : Window.Windowed
     color: "#000000"
     title: "Photo Frame - PySide6 + Qt Quick"
 
@@ -130,17 +133,19 @@ Window {
         font.pixelSize: 38
     }
 
-    TapHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen | PointerDevice.TouchPad
-        gesturePolicy: TapHandler.ReleaseWithinBounds
-        onTapped: (eventPoint) => {
-            if (eventPoint.position.y < root.height * root.metadataTapHeightRatio
-                    && eventPoint.position.x > root.width * 0.18
-                    && eventPoint.position.x < root.width * 0.82) {
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        z: -0.5
+
+        onClicked: (mouse) => {
+            if (mouse.y < root.height * root.metadataTapHeightRatio
+                    && mouse.x > root.width * 0.18
+                    && mouse.x < root.width * 0.82) {
                 root.showPhotoDetails()
-            } else if (eventPoint.position.x < root.width * 0.40) {
+            } else if (mouse.x < root.width * 0.40) {
                 root.backend.previousImage()
-            } else if (eventPoint.position.x > root.width * 0.60) {
+            } else if (mouse.x > root.width * 0.60) {
                 root.backend.nextImage()
             }
         }
@@ -239,7 +244,6 @@ Window {
                     Layout.preferredWidth: root.isPortrait ? 38 : 40
                     Layout.preferredHeight: root.isPortrait ? 38 : 40
                     fillMode: VectorImage.PreserveAspectFit
-                    animations.loops: Animation.Infinite
                 }
 
                 Text {

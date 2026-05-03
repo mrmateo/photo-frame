@@ -14,11 +14,28 @@ from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from .config import AppConfig
 from .photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
 from .weather_service import WeatherService
-from .weather_types import UNKNOWN_WEATHER_ICON_KEY, WEATHER_ICON_EXTENSION, weather_icon_key
+from .weather_types import (
+    UNKNOWN_WEATHER_ICON_KEY,
+    WEATHER_ICON_EXTENSION,
+    format_weather_condition,
+    weather_icon_key,
+)
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 SYNC_STATUS_CLEAR_MS = 10_000
+DEMO_WEATHER_CONDITIONS = (
+    ('sunny', 72),
+    ('partlycloudy', 68),
+    ('cloudy', 64),
+    ('rain', 59),
+    ('heavyrain', 57),
+    ('thunderstorm', 61),
+    ('snow', 31),
+    ('snowyrainy', 35),
+    ('fog', 52),
+    ('windy', 66),
+)
 
 
 class PhotoFrameController(QObject):
@@ -69,6 +86,7 @@ class PhotoFrameController(QObject):
         self._sync_in_progress = False
         self._weather_in_progress = False
         self._photo_metadata: dict[str, object] = {}
+        self._demo_weather_index = 0
 
         self._image_timer = QTimer(self)
         self._image_timer.timeout.connect(self._advance_image_timer)
@@ -148,7 +166,7 @@ class PhotoFrameController(QObject):
         self._sync_timer.start(hourly_interval_ms)
 
         if self.demo_mode:
-            self._set_weather_text('Demo mode weather')
+            self._update_demo_weather()
             self._set_sync_status('Demo mode: network calls disabled.', auto_clear_ms=SYNC_STATUS_CLEAR_MS)
             return
 
@@ -354,6 +372,8 @@ class PhotoFrameController(QObject):
 
         self._index = (self._index + delta) % len(self._images)
         self._set_current_image(self._images[self._index])
+        if self.demo_mode:
+            self._advance_demo_weather()
 
     @Slot()
     def nextImage(self) -> None:
@@ -408,8 +428,7 @@ class PhotoFrameController(QObject):
     @Slot()
     def refreshWeather(self) -> None:
         if self.demo_mode:
-            self._set_weather_text('Demo mode weather')
-            self._set_weather_icon(self._resolve_weather_icon('sunny'))
+            self._advance_demo_weather()
             return
 
         if self._weather_in_progress:
@@ -435,6 +454,15 @@ class PhotoFrameController(QObject):
     def _on_weather_finished(self, weather_text: str, condition: str) -> None:
         self._weather_in_progress = False
         self._set_weather_text(weather_text)
+        self._set_weather_icon(self._resolve_weather_icon(condition))
+
+    def _advance_demo_weather(self) -> None:
+        self._demo_weather_index = (self._demo_weather_index + 1) % len(DEMO_WEATHER_CONDITIONS)
+        self._update_demo_weather()
+
+    def _update_demo_weather(self) -> None:
+        condition, temperature = DEMO_WEATHER_CONDITIONS[self._demo_weather_index]
+        self._set_weather_text(f'{temperature} F {format_weather_condition(condition)}')
         self._set_weather_icon(self._resolve_weather_icon(condition))
 
     @Slot()

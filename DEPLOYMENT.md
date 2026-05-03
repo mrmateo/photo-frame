@@ -12,6 +12,13 @@ venv/bin/pyside6-project build .
 
 That build step generates `rc_resources.py` from `resources.qrc`, allowing `qrc:/` loading of QML and assets.
 
+### PySide6 version requirements
+
+This app uses Qt Quick `VectorImage` for animated SVG weather icons, so the
+Python environment needs `PySide6>=6.10.0`.
+
+For Raspberry Pi OS, this requires version 6.0 or newer (based off of Debian Trixie).
+
 ## 2) Local smoke test
 
 ```bash
