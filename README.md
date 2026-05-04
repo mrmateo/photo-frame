@@ -32,10 +32,6 @@ This implementation is structured around Qt/PySide deployment guidance:
 Optional:
 - `shutdown_command`: command array used by shutdown button.
   - Example: `["systemctl", "poweroff"]`
-- `touch_invert_x` / `touch_invert_y`: flip tap coordinates when a
-  touchscreen reports touches mirrored from the displayed image. If a Raspberry
-  Pi display is visually rotated 180 degrees but touch input is not, set both to
-  `true`.
 
 Recommended Immich API key permissions:
 - `album.read`: read the configured album and its asset list.

@@ -9,8 +9,6 @@ Window {
     property bool startFullScreen: true
     property int initialWidth: 1280
     property int initialHeight: 720
-    property bool touchInvertX: false
-    property bool touchInvertY: false
 
     width: initialWidth
     height: initialHeight
@@ -60,54 +58,6 @@ Window {
 
         root.metadataVisible = true
         metadataHideTimer.restart()
-    }
-
-    function tapPoint(mouse) {
-        return {
-            x: root.touchInvertX ? root.width - mouse.x : mouse.x,
-            y: root.touchInvertY ? root.height - mouse.y : mouse.y
-        }
-    }
-
-    function visualRect(item) {
-        const position = item.mapToItem(root, 0, 0)
-        return {
-            x: root.touchInvertX ? root.width - position.x - item.width : position.x,
-            y: root.touchInvertY ? root.height - position.y - item.height : position.y,
-            width: item.width,
-            height: item.height
-        }
-    }
-
-    function rectContains(rect, point) {
-        return point.x >= rect.x
-                && point.x <= rect.x + rect.width
-                && point.y >= rect.y
-                && point.y <= rect.y + rect.height
-    }
-
-    function handleTap(tap) {
-        if (root.rectContains(root.visualRect(syncButton), tap)) {
-            if (syncButton.enabled) {
-                root.backend.syncNow()
-            }
-            return
-        }
-
-        if (root.rectContains(root.visualRect(shutdownButton), tap)) {
-            root.backend.shutdownNow()
-            return
-        }
-
-        if (tap.y < root.height * root.metadataTapHeightRatio
-                && tap.x > root.width * 0.18
-                && tap.x < root.width * 0.82) {
-            root.showPhotoDetails()
-        } else if (tap.x < root.width * 0.40) {
-            root.backend.previousImage()
-        } else if (tap.x > root.width * 0.60) {
-            root.backend.nextImage()
-        }
     }
 
     Image {
@@ -183,13 +133,19 @@ Window {
         font.pixelSize: 38
     }
 
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
-        z: 3
-
-        onClicked: (mouse) => {
-            root.handleTap(root.tapPoint(mouse))
+    TapHandler {
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchScreen | PointerDevice.TouchPad
+        gesturePolicy: TapHandler.ReleaseWithinBounds
+        onTapped: (eventPoint) => {
+            if (eventPoint.position.y < root.height * root.metadataTapHeightRatio
+                    && eventPoint.position.x > root.width * 0.18
+                    && eventPoint.position.x < root.width * 0.82) {
+                root.showPhotoDetails()
+            } else if (eventPoint.position.x < root.width * 0.40) {
+                root.backend.previousImage()
+            } else if (eventPoint.position.x > root.width * 0.60) {
+                root.backend.nextImage()
+            }
         }
     }
 
@@ -315,6 +271,7 @@ Window {
                     icon.color: "#ffffff"
                     enabled: root.backend.syncEnabled
                     opacity: enabled ? 1.0 : 0.45
+                    onClicked: root.backend.syncNow()
 
                     background: Rectangle {
                         radius: width / 2
@@ -336,6 +293,7 @@ Window {
                     icon.width: root.actionIconSize
                     icon.height: root.actionIconSize
                     icon.color: "#ffffff"
+                    onClicked: root.backend.shutdownNow()
 
                     background: Rectangle {
                         radius: width / 2

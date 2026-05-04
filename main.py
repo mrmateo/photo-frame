@@ -233,8 +233,6 @@ def main() -> int:
             'startFullScreen': not windowed,
             'initialWidth': window_width,
             'initialHeight': window_height,
-            'touchInvertX': config.touch_invert_x,
-            'touchInvertY': config.touch_invert_y,
         }
     )
     engine.load(qml_url)

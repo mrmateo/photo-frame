@@ -35,23 +35,6 @@ def _coerce_shutdown_command(value: object) -> tuple[str, ...] | None:
     return None
 
 
-def _coerce_bool(value: object, fallback: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-
-    if isinstance(value, (int, float)):
-        return bool(value)
-
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {'1', 'true', 'yes', 'on'}:
-            return True
-        if normalized in {'0', 'false', 'no', 'off'}:
-            return False
-
-    return fallback
-
-
 @dataclass(slots=True)
 class AppConfig:
     immich_server_url: str = ''
@@ -63,8 +46,6 @@ class AppConfig:
     image_cycle_seconds: int = 15
     hourly_interval_seconds: int = 3600
     shutdown_command: tuple[str, ...] | None = None
-    touch_invert_x: bool = False
-    touch_invert_y: bool = False
     config_dir: Path = Path('.')
 
     @property
@@ -104,8 +85,6 @@ class AppConfig:
                 minimum=MIN_HOURLY_INTERVAL_SECONDS,
             ),
             shutdown_command=_coerce_shutdown_command(payload.get('shutdown_command')),
-            touch_invert_x=_coerce_bool(payload.get('touch_invert_x')),
-            touch_invert_y=_coerce_bool(payload.get('touch_invert_y')),
             config_dir=config_path.resolve().parent,
         )
 
