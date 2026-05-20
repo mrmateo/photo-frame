@@ -144,9 +144,9 @@ Window {
                     && mouse.x < root.width * 0.82) {
                 root.showPhotoDetails()
             } else if (mouse.x < root.width * 0.40) {
-                root.backend.previousImage()
-            } else if (mouse.x > root.width * 0.60) {
                 root.backend.nextImage()
+            } else if (mouse.x > root.width * 0.60) {
+                root.backend.previousImage()
             }
         }
     }
