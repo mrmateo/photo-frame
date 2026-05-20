@@ -217,6 +217,11 @@ Window {
         radius: 16
         color: "#6f0c1320"
 
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+        }
+
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
