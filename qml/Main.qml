@@ -139,17 +139,21 @@ Window {
         z: -0.5
 
         onClicked: (mouse) => {
-            var metadataZoneY = root.height * root.metadataTapHeightRatio;
-            if (mouse.y > root.height - metadataZoneY
-                     && mouse.x < root.width * (1 - 0.18)
-                     && mouse.x > root.width * 0.18) {
-                root.showPhotoDetails()
-            } else if (mouse.x > root.width * (1 - 0.40)) {
-                root.backend.nextImage()
-            } else if (mouse.x < root.width * 0.60) {
-                root.backend.previousImage()
-            }
-        }
+             if (mouse.x >= infoPanel.x && mouse.x <= infoPanel.x + infoPanel.width
+                      && mouse.y >= infoPanel.y && mouse.y <= infoPanel.y + infoPanel.height) {
+                return;
+             }
+             var metadataZoneY = root.height * root.metadataTapHeightRatio;
+             if (mouse.y > root.height - metadataZoneY
+                      && mouse.x < root.width * (1 - 0.18)
+                      && mouse.x > root.width * 0.18) {
+                 root.showPhotoDetails()
+              } else if (mouse.x > root.width * (1 - 0.40)) {
+                 root.backend.nextImage()
+              } else if (mouse.x < root.width * 0.60) {
+                 root.backend.previousImage()
+              }
+          }
     }
 
     Rectangle {
@@ -217,10 +221,7 @@ Window {
         radius: 16
         color: "#6f0c1320"
 
-        MouseArea {
-            anchors.fill: parent
-            acceptedButtons: Qt.LeftButton
-        }
+
 
         ColumnLayout {
             anchors.fill: parent
