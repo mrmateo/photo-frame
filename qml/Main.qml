@@ -139,13 +139,14 @@ Window {
         z: -0.5
 
         onClicked: (mouse) => {
-            if (mouse.y < root.height * root.metadataTapHeightRatio
-                    && mouse.x > root.width * 0.18
-                    && mouse.x < root.width * 0.82) {
+            var metadataZoneY = root.height * root.metadataTapHeightRatio;
+            if (mouse.y > root.height - metadataZoneY
+                     && mouse.x < root.width * (1 - 0.18)
+                     && mouse.x > root.width * 0.18) {
                 root.showPhotoDetails()
-            } else if (mouse.x < root.width * 0.40) {
+            } else if (mouse.x > root.width * (1 - 0.40)) {
                 root.backend.nextImage()
-            } else if (mouse.x > root.width * 0.60) {
+            } else if (mouse.x < root.width * 0.60) {
                 root.backend.previousImage()
             }
         }
