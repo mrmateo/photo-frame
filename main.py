@@ -16,6 +16,7 @@ from photoframe.controller import PhotoFrameController
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_LOCAL_CONFIG_PATH = APP_DIR / 'config.json'
 DEFAULT_ENV_CONFIG_KEY = 'PHOTO_FRAME_CONFIG'
+TOUCH_DEBUG_ENV_KEY = 'PHOTO_FRAME_TOUCH_DEBUG'
 RESOURCE_QML_URL = QUrl('qrc:/qml/Main.qml')
 RESOURCE_WEATHER_ICON_BASE = 'qrc:/assets/weather'
 
@@ -67,6 +68,10 @@ def parse_window_size(raw_value: str) -> tuple[int, int]:
     if width < 320 or height < 240:
         raise ValueError('--size must be at least 320x240')
     return width, height
+
+
+def env_flag_enabled(key: str) -> bool:
+    return os.environ.get(key, '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def resolve_config_path(explicit_path: str, demo_mode: bool) -> Path | None:
@@ -142,6 +147,10 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
         '1280x720',
     )
     verbose_option = QCommandLineOption(['verbose'], 'Enable console logging.')
+    touch_debug_option = QCommandLineOption(
+        ['touch-debug'],
+        'Show touch coordinate diagnostics overlay.',
+    )
 
     parser.addOption(config_option)
     parser.addOption(demo_mode_option)
@@ -149,6 +158,7 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
     parser.addOption(windowed_option)
     parser.addOption(size_option)
     parser.addOption(verbose_option)
+    parser.addOption(touch_debug_option)
 
     return parser, {
         'config': config_option,
@@ -157,6 +167,7 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
         'windowed': windowed_option,
         'size': size_option,
         'verbose': verbose_option,
+        'touch_debug': touch_debug_option,
     }
 
 
@@ -179,6 +190,7 @@ def main() -> int:
 
     demo_mode = parser.isSet(options['demo'])
     windowed = parser.isSet(options['windowed'])
+    touch_debug = parser.isSet(options['touch_debug']) or env_flag_enabled(TOUCH_DEBUG_ENV_KEY)
 
     try:
         auto_exit_seconds = parse_auto_exit_seconds(parser.value(options['auto_exit']))
@@ -215,6 +227,8 @@ def main() -> int:
         logger.info('Loaded config: %s', config_path)
     else:
         logger.info('Running with demo config.')
+    if touch_debug:
+        logger.info('Touch debug overlay enabled.')
 
     engine = QQmlApplicationEngine()
     engine.objectCreationFailed.connect(
@@ -233,6 +247,7 @@ def main() -> int:
             'startFullScreen': not windowed,
             'initialWidth': window_width,
             'initialHeight': window_height,
+            'touchDebugEnabled': touch_debug,
         }
     )
     engine.load(qml_url)

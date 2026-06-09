@@ -9,6 +9,7 @@ Window {
     property bool startFullScreen: true
     property int initialWidth: 1280
     property int initialHeight: 720
+    property bool touchDebugEnabled: false
 
     width: initialWidth
     height: initialHeight
@@ -28,6 +29,10 @@ Window {
     readonly property color overlayColor: "#73232d3f"
     property string displayedImage: ""
     property bool metadataVisible: false
+    property bool touchDebugSeen: false
+    property int touchDebugX: 0
+    property int touchDebugY: 0
+    property string touchDebugText: "Touch debug waiting for press"
 
     function uiIconSource(fileName) {
         if (useQrcAssets) {
@@ -58,6 +63,32 @@ Window {
 
         root.metadataVisible = true
         metadataHideTimer.restart()
+    }
+
+    function touchZone(x, y) {
+        if (y < root.height * root.metadataTapHeightRatio
+                && x > root.width * 0.18
+                && x < root.width * 0.82) {
+            return "metadata trigger"
+        }
+
+        return x < root.width * 0.50 ? "previous" : "next"
+    }
+
+    function recordTouch(source, x, y) {
+        if (!root.touchDebugEnabled) {
+            return
+        }
+
+        root.touchDebugSeen = true
+        root.touchDebugX = Math.round(x)
+        root.touchDebugY = Math.round(y)
+        root.touchDebugText = source
+            + " x=" + root.touchDebugX
+            + " y=" + root.touchDebugY
+            + " size=" + Math.round(root.width) + "x" + Math.round(root.height)
+            + " zone=" + root.touchZone(x, y)
+        console.log("touch-debug " + root.touchDebugText)
     }
 
     function navigationLocked() {
@@ -154,6 +185,10 @@ Window {
         acceptedButtons: Qt.LeftButton
         z: -0.5
 
+        onPressed: (mouse) => {
+            root.recordTouch("photo", mouse.x, mouse.y)
+        }
+
         onClicked: (mouse) => {
             if (mouse.y < root.height * root.metadataTapHeightRatio
                     && mouse.x > root.width * 0.18
@@ -189,6 +224,11 @@ Window {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
+
+            onPressed: (mouse) => {
+                const point = statusPanel.mapToItem(root, mouse.x, mouse.y)
+                root.recordTouch("status", point.x, point.y)
+            }
         }
     }
 
@@ -228,6 +268,11 @@ Window {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
             enabled: root.metadataVisible && root.backend.currentPhotoDetails.length > 0
+
+            onPressed: (mouse) => {
+                const point = metadataPanel.mapToItem(root, mouse.x, mouse.y)
+                root.recordTouch("metadata panel", point.x, point.y)
+            }
         }
     }
 
@@ -246,6 +291,11 @@ Window {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
+
+            onPressed: (mouse) => {
+                const point = infoPanel.mapToItem(root, mouse.x, mouse.y)
+                root.recordTouch("info panel", point.x, point.y)
+            }
         }
 
         ColumnLayout {
@@ -305,6 +355,12 @@ Window {
                     icon.color: "#ffffff"
                     enabled: root.backend.syncEnabled
                     opacity: enabled ? 1.0 : 0.45
+                    onPressedChanged: {
+                        if (pressed) {
+                            const point = syncButton.mapToItem(root, syncButton.width / 2, syncButton.height / 2)
+                            root.recordTouch("sync button", point.x, point.y)
+                        }
+                    }
                     onClicked: root.backend.syncNow()
 
                     background: Rectangle {
@@ -327,6 +383,12 @@ Window {
                     icon.width: root.actionIconSize
                     icon.height: root.actionIconSize
                     icon.color: "#ffffff"
+                    onPressedChanged: {
+                        if (pressed) {
+                            const point = shutdownButton.mapToItem(root, shutdownButton.width / 2, shutdownButton.height / 2)
+                            root.recordTouch("shutdown button", point.x, point.y)
+                        }
+                    }
                     onClicked: root.backend.shutdownNow()
 
                     background: Rectangle {
@@ -338,5 +400,43 @@ Window {
                 }
             }
         }
+    }
+
+    Rectangle {
+        id: touchDebugPanel
+        visible: root.touchDebugEnabled
+        width: Math.min(root.width - 24, 760)
+        height: 64
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: 10
+        radius: 8
+        color: "#df111722"
+        border.width: 1
+        border.color: "#f5ffffff"
+        z: 100
+
+        Text {
+            anchors.fill: parent
+            anchors.margins: 10
+            text: root.touchDebugText
+            color: "#ffffff"
+            font.pixelSize: 18
+            font.bold: true
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    Rectangle {
+        visible: root.touchDebugEnabled && root.touchDebugSeen
+        width: 28
+        height: 28
+        radius: 14
+        x: Math.max(0, Math.min(root.width - width, root.touchDebugX - width / 2))
+        y: Math.max(0, Math.min(root.height - height, root.touchDebugY - height / 2))
+        color: "#f4ff3355"
+        border.width: 3
+        border.color: "#ffffff"
+        z: 101
     }
 }
