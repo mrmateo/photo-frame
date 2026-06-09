@@ -60,6 +60,22 @@ Window {
         metadataHideTimer.restart()
     }
 
+    function navigationLocked() {
+        return fadeOut.running || fadeIn.running
+    }
+
+    function previousPhoto() {
+        if (!navigationLocked()) {
+            root.backend.previousImage()
+        }
+    }
+
+    function nextPhoto() {
+        if (!navigationLocked()) {
+            root.backend.nextImage()
+        }
+    }
+
     Image {
         id: photo
         anchors.fill: parent
@@ -143,10 +159,10 @@ Window {
                     && mouse.x > root.width * 0.18
                     && mouse.x < root.width * 0.82) {
                 root.showPhotoDetails()
-            } else if (mouse.x < root.width * 0.40) {
-                root.backend.previousImage()
-            } else if (mouse.x > root.width * 0.60) {
-                root.backend.nextImage()
+            } else if (mouse.x < root.width * 0.50) {
+                root.previousPhoto()
+            } else {
+                root.nextPhoto()
             }
         }
     }
@@ -168,6 +184,11 @@ Window {
             text: root.backend.syncStatus
             color: "#e7f1ff"
             font.pixelSize: 19
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
         }
     }
 
@@ -202,6 +223,12 @@ Window {
             wrapMode: Text.WordWrap
             elide: Text.ElideRight
         }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            enabled: root.metadataVisible && root.backend.currentPhotoDetails.length > 0
+        }
     }
 
     Rectangle {
@@ -215,6 +242,11 @@ Window {
         anchors.bottomMargin: root.isPortrait ? 24 : 14
         radius: 16
         color: "#6f0c1320"
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+        }
 
         ColumnLayout {
             anchors.fill: parent
