@@ -209,14 +209,17 @@ def write_config() -> None:
 
 def write_sample_photos() -> None:
     PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
-    manifest: dict[str, object] = {'photos': {}}
+    manifest: dict[str, object] = {'photo_order': [], 'photos': {}}
+    photo_order = manifest['photo_order']
     photos = manifest['photos']
+    assert isinstance(photo_order, list)
     assert isinstance(photos, dict)
 
     for sample in SAMPLE_PHOTOS:
         filename = str(sample['filename'])
         output_path = PHOTOS_DIR / filename
         generate_photo(sample, output_path)
+        photo_order.append(filename)
         photos[filename] = {
             'taken_at': sample['taken_at'],
             'location': sample['location'],

@@ -158,6 +158,7 @@ class PhotoSyncService:
         photos_path: Path,
         album: dict[str, object],
         entries: dict[str, dict[str, object]],
+        photo_order: list[str],
     ) -> None:
         manifest_path = photos_path / MANIFEST_FILENAME
         temp_path = manifest_path.with_suffix('.tmp')
@@ -165,6 +166,7 @@ class PhotoSyncService:
         payload = {
             'version': 1,
             'album': album_name,
+            'photo_order': photo_order,
             'photos': entries,
         }
 
@@ -252,6 +254,8 @@ class PhotoSyncService:
         summary = SyncSummary(remote_assets=len(assets))
         album_name = self._first_text_value(album.get('albumName'), album.get('name'))
         manifest_entries: dict[str, dict[str, object]] = {}
+        photo_order: list[str] = []
+        ordered_filenames: set[str] = set()
         face_metadata_available = True
 
         expected_filenames = {
@@ -272,6 +276,10 @@ class PhotoSyncService:
 
             local_filename = self.to_local_jpg_name(original_file_name)
             local_path = photos_path / local_filename
+            if local_filename not in ordered_filenames:
+                photo_order.append(local_filename)
+                ordered_filenames.add(local_filename)
+
             people = self._extract_people(asset)
             if not people and face_metadata_available:
                 try:
@@ -334,7 +342,12 @@ class PhotoSyncService:
                 self.logger.exception('Processing failed for %s', local_filename)
                 summary.failed += 1
 
-        self._write_manifest(photos_path=photos_path, album=album, entries=manifest_entries)
+        self._write_manifest(
+            photos_path=photos_path,
+            album=album,
+            entries=manifest_entries,
+            photo_order=photo_order,
+        )
 
         existing_files = {
             entry.name
