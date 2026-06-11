@@ -60,6 +60,28 @@ Window {
         return weatherText
     }
 
+    function metadataLines() {
+        var rawLines = root.backend.currentPhotoDetails.split("\n")
+        var lines = []
+        for (var index = 0; index < rawLines.length; index += 1) {
+            var line = rawLines[index].trim()
+            if (line.length > 0) {
+                lines.push(line)
+            }
+        }
+        return lines
+    }
+
+    function metadataTitleText() {
+        var lines = root.metadataLines()
+        return lines.length > 0 ? lines[0] : ""
+    }
+
+    function metadataBodyText() {
+        var lines = root.metadataLines()
+        return lines.length > 1 ? lines.slice(1).join("\n") : ""
+    }
+
     function uiIconSource(fileName) {
         if (useQrcAssets) {
             return "qrc:/assets/ui/" + fileName
@@ -221,36 +243,59 @@ Window {
         }
     }
 
-    Rectangle {
-        id: metadataPanel
-        width: root.overlayWidth
-        height: Math.min(metadataText.implicitHeight + 30, root.height * 0.36)
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: parent.top
-        anchors.topMargin: statusPanel.visible ? 78 : 18
-        radius: root.overlayRadius
-        color: root.overlayColor
-        clip: true
+    Item {
+        id: metadataCaption
+        width: root.isPortrait ? Math.min(root.width * 0.84, 620) : Math.min(root.width * 0.38, 460)
+        height: metadataColumn.implicitHeight
+        anchors.horizontalCenter: root.isPortrait ? parent.horizontalCenter : undefined
+        anchors.right: root.isPortrait ? undefined : parent.right
+        anchors.rightMargin: root.isPortrait ? 0 : 36
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.isPortrait ? 270 : 34
         opacity: root.metadataVisible && root.backend.currentPhotoDetails.length > 0 ? 1 : 0
-        z: 1
+        visible: opacity > 0.01
+        z: 2
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 180
+                duration: 220
                 easing.type: Easing.InOutQuad
             }
         }
 
-        Text {
-            id: metadataText
-            anchors.fill: parent
-            anchors.margins: 15
-            text: root.backend.currentPhotoDetails
-            color: "#f5fbff"
-            font.pixelSize: root.isPortrait ? 23 : 21
-            lineHeight: 1.12
-            wrapMode: Text.WordWrap
-            elide: Text.ElideRight
+        ColumnLayout {
+            id: metadataColumn
+            width: parent.width
+            spacing: root.isPortrait ? 7 : 6
+
+            Text {
+                Layout.fillWidth: true
+                horizontalAlignment: root.isPortrait ? Text.AlignHCenter : Text.AlignRight
+                text: root.metadataTitleText()
+                color: "#ffffff"
+                font.pixelSize: root.isPortrait ? 25 : 24
+                font.weight: Font.DemiBold
+                maximumLineCount: 1
+                elide: Text.ElideRight
+                style: Text.Raised
+                styleColor: "#a0000000"
+            }
+
+            Text {
+                Layout.fillWidth: true
+                horizontalAlignment: root.isPortrait ? Text.AlignHCenter : Text.AlignRight
+                text: root.metadataBodyText()
+                visible: text.length > 0
+                color: "#e1eaf4"
+                font.pixelSize: root.isPortrait ? 19 : 18
+                font.weight: Font.Normal
+                lineHeight: 1.12
+                maximumLineCount: root.isPortrait ? 5 : 6
+                wrapMode: Text.WordWrap
+                elide: Text.ElideRight
+                style: Text.Raised
+                styleColor: "#99000000"
+            }
         }
     }
 
