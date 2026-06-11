@@ -69,6 +69,7 @@ class PhotoFrameController(QObject):
         self._sync_in_progress = False
         self._weather_in_progress = False
         self._photo_metadata: dict[str, object] = {}
+        self._photo_order: list[str] = []
 
         self._image_timer = QTimer(self)
         self._image_timer.timeout.connect(self._advance_image_timer)
@@ -238,6 +239,7 @@ class PhotoFrameController(QObject):
             for path in sorted(self.photos_path.iterdir(), key=lambda entry: self.natural_sort_key(entry.name))
             if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
         ]
+        images = self._order_images_by_manifest(images)
         self._images = images
         self._set_has_images(bool(images))
 
@@ -257,6 +259,7 @@ class PhotoFrameController(QObject):
         manifest_path = self.photos_path / MANIFEST_FILENAME
         if not manifest_path.exists():
             self._photo_metadata = {}
+            self._photo_order = []
             return
 
         try:
@@ -264,10 +267,39 @@ class PhotoFrameController(QObject):
         except (OSError, json.JSONDecodeError) as error:
             LOGGER.warning('Could not read photo metadata manifest %s: %s', manifest_path, error)
             self._photo_metadata = {}
+            self._photo_order = []
             return
 
         photos = payload.get('photos') if isinstance(payload, dict) else None
         self._photo_metadata = photos if isinstance(photos, dict) else {}
+
+        photo_order = payload.get('photo_order') if isinstance(payload, dict) else None
+        if isinstance(photo_order, list):
+            self._photo_order = [
+                filename.strip()
+                for filename in photo_order
+                if isinstance(filename, str) and filename.strip()
+            ]
+        else:
+            self._photo_order = []
+
+    def _order_images_by_manifest(self, images: list[Path]) -> list[Path]:
+        if not self._photo_order:
+            return images
+
+        images_by_name = {path.name: path for path in images}
+        ordered_images: list[Path] = []
+        seen_names: set[str] = set()
+
+        for filename in self._photo_order:
+            image_path = images_by_name.get(filename)
+            if image_path is None or filename in seen_names:
+                continue
+            ordered_images.append(image_path)
+            seen_names.add(filename)
+
+        ordered_images.extend(path for path in images if path.name not in seen_names)
+        return ordered_images
 
     @staticmethod
     def _metadata_text(value: object) -> str:

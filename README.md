@@ -7,7 +7,7 @@ This implementation is structured around Qt/PySide deployment guidance:
 - deployment flow with `pyside6-project` and `pyside6-deploy`.
 
 ## Included behavior
-- Full-screen slideshow with edge tap navigation.
+- Full-screen slideshow with edge tap navigation in Immich album order.
 - Top-center tap photo metadata overlay with date, location, album,
   favorite state, filename, and tagged people when available.
 - Fade transitions and responsive info panel layout.
@@ -109,7 +109,7 @@ Override by setting `QT_QPA_PLATFORM` in `/etc/default/photo_frame`.
 ## Notes
 - If `rc_resources.py` is missing, app falls back to filesystem QML/assets and logs a warning.
 - Logs are written to `QStandardPaths.AppDataLocation/logs/photo_frame.log`.
-- Synced photo metadata is stored beside the downloaded photos in `.photo_frame_manifest.json`.
+- Synced photo metadata and Immich album order are stored beside the downloaded photos in `.photo_frame_manifest.json`.
 - Stale cleanup only removes local `.jpg`/`.jpeg` files that are no longer present in the configured Immich album.
 
 ## Collect Raspberry Pi diagnostics
