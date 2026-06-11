@@ -32,7 +32,8 @@ Window {
     property bool touchDebugSeen: false
     property int touchDebugX: 0
     property int touchDebugY: 0
-    property string touchDebugText: "Touch debug waiting for press"
+    property string touchDebugPressText: "press: waiting"
+    property string touchDebugClickText: "click: waiting"
 
     function uiIconSource(fileName) {
         if (useQrcAssets) {
@@ -75,7 +76,7 @@ Window {
         return x < root.width * 0.50 ? "previous" : "next"
     }
 
-    function recordTouch(source, x, y) {
+    function recordTouch(source, phase, x, y, routedZone) {
         if (!root.touchDebugEnabled) {
             return
         }
@@ -83,12 +84,37 @@ Window {
         root.touchDebugSeen = true
         root.touchDebugX = Math.round(x)
         root.touchDebugY = Math.round(y)
-        root.touchDebugText = source
+
+        const line = phase + " " + source
             + " x=" + root.touchDebugX
             + " y=" + root.touchDebugY
             + " size=" + Math.round(root.width) + "x" + Math.round(root.height)
             + " zone=" + root.touchZone(x, y)
-        console.log("touch-debug " + root.touchDebugText)
+            + (routedZone ? " routed=" + routedZone : "")
+
+        if (phase === "press") {
+            root.touchDebugPressText = line
+        } else {
+            root.touchDebugClickText = line
+        }
+        console.log("touch-debug " + line)
+    }
+
+    function routePhotoClick(x, y) {
+        if (y < root.height * root.metadataTapHeightRatio
+                && x > root.width * 0.18
+                && x < root.width * 0.82) {
+            root.showPhotoDetails()
+            return "metadata trigger"
+        }
+
+        if (x < root.width * 0.50) {
+            root.previousPhoto()
+            return "previous"
+        }
+
+        root.nextPhoto()
+        return "next"
     }
 
     function navigationLocked() {
@@ -186,19 +212,12 @@ Window {
         z: -0.5
 
         onPressed: (mouse) => {
-            root.recordTouch("photo", mouse.x, mouse.y)
+            root.recordTouch("photo", "press", mouse.x, mouse.y, "")
         }
 
         onClicked: (mouse) => {
-            if (mouse.y < root.height * root.metadataTapHeightRatio
-                    && mouse.x > root.width * 0.18
-                    && mouse.x < root.width * 0.82) {
-                root.showPhotoDetails()
-            } else if (mouse.x < root.width * 0.50) {
-                root.previousPhoto()
-            } else {
-                root.nextPhoto()
-            }
+            const routedZone = root.routePhotoClick(mouse.x, mouse.y)
+            root.recordTouch("photo", "click", mouse.x, mouse.y, routedZone)
         }
     }
 
@@ -227,7 +246,12 @@ Window {
 
             onPressed: (mouse) => {
                 const point = statusPanel.mapToItem(root, mouse.x, mouse.y)
-                root.recordTouch("status", point.x, point.y)
+                root.recordTouch("status", "press", point.x, point.y, "")
+            }
+
+            onClicked: (mouse) => {
+                const point = statusPanel.mapToItem(root, mouse.x, mouse.y)
+                root.recordTouch("status", "click", point.x, point.y, "blocked status")
             }
         }
     }
@@ -267,11 +291,17 @@ Window {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
-            enabled: root.metadataVisible && root.backend.currentPhotoDetails.length > 0
+            enabled: root.metadataVisible
+                && root.backend.currentPhotoDetails.length > 0
 
             onPressed: (mouse) => {
                 const point = metadataPanel.mapToItem(root, mouse.x, mouse.y)
-                root.recordTouch("metadata panel", point.x, point.y)
+                root.recordTouch("metadata panel", "press", point.x, point.y, "")
+            }
+
+            onClicked: (mouse) => {
+                const point = metadataPanel.mapToItem(root, mouse.x, mouse.y)
+                root.recordTouch("metadata panel", "click", point.x, point.y, "blocked metadata")
             }
         }
     }
@@ -294,7 +324,12 @@ Window {
 
             onPressed: (mouse) => {
                 const point = infoPanel.mapToItem(root, mouse.x, mouse.y)
-                root.recordTouch("info panel", point.x, point.y)
+                root.recordTouch("info panel", "press", point.x, point.y, "")
+            }
+
+            onClicked: (mouse) => {
+                const point = infoPanel.mapToItem(root, mouse.x, mouse.y)
+                root.recordTouch("info panel", "click", point.x, point.y, "blocked info")
             }
         }
 
@@ -358,10 +393,14 @@ Window {
                     onPressedChanged: {
                         if (pressed) {
                             const point = syncButton.mapToItem(root, syncButton.width / 2, syncButton.height / 2)
-                            root.recordTouch("sync button", point.x, point.y)
+                            root.recordTouch("sync button", "press", point.x, point.y, "")
                         }
                     }
-                    onClicked: root.backend.syncNow()
+                    onClicked: {
+                        const point = syncButton.mapToItem(root, syncButton.width / 2, syncButton.height / 2)
+                        root.recordTouch("sync button", "click", point.x, point.y, "sync")
+                        root.backend.syncNow()
+                    }
 
                     background: Rectangle {
                         radius: width / 2
@@ -386,10 +425,14 @@ Window {
                     onPressedChanged: {
                         if (pressed) {
                             const point = shutdownButton.mapToItem(root, shutdownButton.width / 2, shutdownButton.height / 2)
-                            root.recordTouch("shutdown button", point.x, point.y)
+                            root.recordTouch("shutdown button", "press", point.x, point.y, "")
                         }
                     }
-                    onClicked: root.backend.shutdownNow()
+                    onClicked: {
+                        const point = shutdownButton.mapToItem(root, shutdownButton.width / 2, shutdownButton.height / 2)
+                        root.recordTouch("shutdown button", "click", point.x, point.y, "shutdown")
+                        root.backend.shutdownNow()
+                    }
 
                     background: Rectangle {
                         radius: width / 2
@@ -406,7 +449,7 @@ Window {
         id: touchDebugPanel
         visible: root.touchDebugEnabled
         width: Math.min(root.width - 24, 760)
-        height: 64
+        height: 88
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: 10
@@ -419,9 +462,9 @@ Window {
         Text {
             anchors.fill: parent
             anchors.margins: 10
-            text: root.touchDebugText
+            text: root.touchDebugPressText + "\n" + root.touchDebugClickText
             color: "#ffffff"
-            font.pixelSize: 18
+            font.pixelSize: 16
             font.bold: true
             wrapMode: Text.WordWrap
         }
