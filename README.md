@@ -59,6 +59,9 @@ From repo root:
 Demo mode (no network/poweroff):
 - `QT_QPA_PLATFORM=offscreen venv/bin/python main.py --demo-mode --auto-exit-seconds 5`
 
+Windowed simulator preview:
+- `venv/bin/python main.py --config .dev-simulator/config.json --demo-mode --windowed --window-size 800x1280`
+
 ## Deployable package (pyside6-deploy)
 From repo root:
 

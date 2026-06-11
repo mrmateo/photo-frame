@@ -6,11 +6,14 @@ import QtQuick.VectorImage
 Window {
     id: root
     required property var backend
+    required property bool startFullScreen
+    required property int initialWindowWidth
+    required property int initialWindowHeight
 
-    width: 1280
-    height: 720
+    width: root.initialWindowWidth
+    height: root.initialWindowHeight
     visible: true
-    visibility: Window.FullScreen
+    visibility: root.startFullScreen ? Window.FullScreen : Window.Windowed
     color: "#000000"
     title: "Photo Frame - PySide6 + Qt Quick"
 
@@ -24,6 +27,7 @@ Window {
     readonly property int overlayRadius: 14
     readonly property color overlayColor: "#73232d3f"
     property string displayedImage: ""
+    property bool controlsVisible: false
     property bool metadataVisible: false
 
     function weatherTemperatureText() {
@@ -87,6 +91,11 @@ Window {
         metadataHideTimer.restart()
     }
 
+    function revealControls() {
+        root.controlsVisible = true
+        controlsHideTimer.restart()
+    }
+
     Image {
         id: photo
         anchors.fill: parent
@@ -119,6 +128,19 @@ Window {
         interval: 8000
         repeat: false
         onTriggered: root.metadataVisible = false
+    }
+
+    Timer {
+        id: controlsHideTimer
+        interval: 6500
+        repeat: false
+        onTriggered: {
+            if (!root.backend.syncInProgress && !shutdownHoldTimer.running) {
+                root.controlsVisible = false
+            } else {
+                restart()
+            }
+        }
     }
 
     NumberAnimation {
@@ -168,10 +190,13 @@ Window {
                     && eventPoint.position.x > root.width * 0.18
                     && eventPoint.position.x < root.width * 0.82) {
                 root.showPhotoDetails()
+                root.revealControls()
             } else if (eventPoint.position.x < root.width * 0.40) {
                 root.backend.previousImage()
             } else if (eventPoint.position.x > root.width * 0.60) {
                 root.backend.nextImage()
+            } else {
+                root.revealControls()
             }
         }
     }
@@ -316,52 +341,89 @@ Window {
 
                 BusyIndicator {
                     running: root.backend.syncInProgress
-                    visible: running
+                    visible: true
+                    opacity: running ? 1.0 : 0.0
                     implicitWidth: root.actionBusySize
                     implicitHeight: root.actionBusySize
                 }
 
-                ToolButton {
-                    id: syncButton
-                    Layout.preferredWidth: root.actionButtonSize
-                    Layout.preferredHeight: root.actionButtonSize
-                    padding: 0
-                    display: AbstractButton.IconOnly
-                    icon.source: root.uiIconSource("sync.svg")
-                    icon.width: root.actionIconSize
-                    icon.height: root.actionIconSize
-                    icon.color: "#ffffff"
-                    enabled: root.backend.syncEnabled
-                    opacity: enabled ? 1.0 : 0.45
-                    onClicked: root.backend.syncNow()
+                RowLayout {
+                    id: actionControls
+                    spacing: root.isPortrait ? 8 : 7
+                    visible: true
+                    opacity: root.controlsVisible || root.backend.syncInProgress ? 1.0 : 0.0
+                    enabled: opacity > 0.7
 
-                    background: Rectangle {
-                        radius: width / 2
-                        color: syncButton.down ? "#d8263948" : "#9d162432"
-                        border.width: root.isPortrait ? 1.3 : 1
-                        border.color: syncButton.enabled
-                            ? (root.isPortrait ? "#9ce6f7ff" : "#69d6e8ff")
-                            : "#3d7f95a6"
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: 180
+                            easing.type: Easing.InOutQuad
+                        }
                     }
-                }
 
-                ToolButton {
-                    id: shutdownButton
-                    Layout.preferredWidth: root.actionButtonSize
-                    Layout.preferredHeight: root.actionButtonSize
-                    padding: 0
-                    display: AbstractButton.IconOnly
-                    icon.source: root.uiIconSource("shutdown.svg")
-                    icon.width: root.actionIconSize
-                    icon.height: root.actionIconSize
-                    icon.color: "#ffffff"
-                    onClicked: root.backend.shutdownNow()
+                    ToolButton {
+                        id: syncButton
+                        Layout.preferredWidth: root.actionButtonSize
+                        Layout.preferredHeight: root.actionButtonSize
+                        padding: 0
+                        display: AbstractButton.IconOnly
+                        icon.source: root.uiIconSource("sync.svg")
+                        icon.width: root.actionIconSize
+                        icon.height: root.actionIconSize
+                        icon.color: "#ffffff"
+                        enabled: root.backend.syncEnabled
+                        opacity: enabled ? 1.0 : 0.45
+                        onClicked: {
+                            root.revealControls()
+                            root.backend.syncNow()
+                        }
 
-                    background: Rectangle {
-                        radius: width / 2
-                        color: shutdownButton.down ? "#df463747" : "#af2a1f34"
-                        border.width: root.isPortrait ? 1.3 : 1
-                        border.color: root.isPortrait ? "#ffd1c8" : "#f5bbb0"
+                        background: Rectangle {
+                            radius: width / 2
+                            color: syncButton.down ? "#d8263948" : "#9d162432"
+                            border.width: root.isPortrait ? 1.3 : 1
+                            border.color: syncButton.enabled
+                                ? (root.isPortrait ? "#9ce6f7ff" : "#69d6e8ff")
+                                : "#3d7f95a6"
+                        }
+                    }
+
+                    ToolButton {
+                        id: shutdownButton
+                        Layout.preferredWidth: root.actionButtonSize
+                        Layout.preferredHeight: root.actionButtonSize
+                        padding: 0
+                        display: AbstractButton.IconOnly
+                        icon.source: root.uiIconSource("shutdown.svg")
+                        icon.width: root.actionIconSize
+                        icon.height: root.actionIconSize
+                        icon.color: "#ffffff"
+                        opacity: pressed ? 1.0 : 0.82
+                        onPressedChanged: {
+                            if (pressed) {
+                                root.revealControls()
+                                shutdownHoldTimer.restart()
+                            } else {
+                                shutdownHoldTimer.stop()
+                            }
+                        }
+
+                        Timer {
+                            id: shutdownHoldTimer
+                            interval: 1100
+                            repeat: false
+                            onTriggered: {
+                                root.controlsVisible = false
+                                root.backend.shutdownNow()
+                            }
+                        }
+
+                        background: Rectangle {
+                            radius: width / 2
+                            color: shutdownButton.down ? "#df463747" : "#af2a1f34"
+                            border.width: root.isPortrait ? 1.3 : 1
+                            border.color: root.isPortrait ? "#ffd1c8" : "#f5bbb0"
+                        }
                     }
                 }
             }
