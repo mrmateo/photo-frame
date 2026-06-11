@@ -8,6 +8,7 @@ This implementation is structured around Qt/PySide deployment guidance:
 
 ## Included behavior
 - Full-screen slideshow with edge tap navigation in Immich album order.
+- Face-aware crop hints from Immich keep people closer to frame.
 - Top-center tap photo metadata overlay with date, location, album,
   favorite state, filename, and tagged people when available.
 - Fade transitions and responsive info panel layout.
@@ -36,7 +37,7 @@ Optional:
 Recommended Immich API key permissions:
 - `album.read`: read the configured album and its asset list.
 - `asset.download`: download each original image.
-- `face.read`: optional but recommended for tagged people. The app first uses
+- `face.read`: optional but recommended for tagged people and face-aware cropping. The app first uses
   people metadata from the album response when present, then falls back to
   `GET /api/faces?id=<asset_id>` for names when the album payload omits them.
 

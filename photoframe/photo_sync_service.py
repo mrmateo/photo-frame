@@ -118,6 +118,70 @@ class PhotoSyncService:
         return PhotoSyncService._extract_people_from_person_items(people)
 
     @staticmethod
+    def _coerce_face_coordinate(face: dict[str, object], key: str) -> int | None:
+        value = face.get(key)
+        if not isinstance(value, (int, float)):
+            return None
+        return int(value)
+
+    @classmethod
+    def _extract_face_bounds(cls, faces: object) -> dict[str, object] | None:
+        if not isinstance(faces, list):
+            return None
+
+        normalized_faces: list[dict[str, object]] = []
+        for face in faces:
+            if not isinstance(face, dict):
+                continue
+
+            person = face.get('person')
+            if isinstance(person, dict) and person.get('isHidden') is True:
+                continue
+
+            image_width = cls._coerce_face_coordinate(face, 'imageWidth')
+            image_height = cls._coerce_face_coordinate(face, 'imageHeight')
+            x1 = cls._coerce_face_coordinate(face, 'boundingBoxX1')
+            x2 = cls._coerce_face_coordinate(face, 'boundingBoxX2')
+            y1 = cls._coerce_face_coordinate(face, 'boundingBoxY1')
+            y2 = cls._coerce_face_coordinate(face, 'boundingBoxY2')
+            if None in {image_width, image_height, x1, x2, y1, y2}:
+                continue
+            if image_width <= 0 or image_height <= 0:
+                continue
+
+            left = max(0, min(x1, x2))
+            right = min(image_width, max(x1, x2))
+            top = max(0, min(y1, y2))
+            bottom = min(image_height, max(y1, y2))
+            if right <= left or bottom <= top:
+                continue
+
+            name = ''
+            if isinstance(person, dict):
+                name = cls._first_text_value(person.get('name'))
+
+            normalized_faces.append(
+                {
+                    'x1': left / image_width,
+                    'y1': top / image_height,
+                    'x2': right / image_width,
+                    'y2': bottom / image_height,
+                    'name': name,
+                }
+            )
+
+        if not normalized_faces:
+            return None
+
+        return {
+            'x1': min(face['x1'] for face in normalized_faces),
+            'y1': min(face['y1'] for face in normalized_faces),
+            'x2': max(face['x2'] for face in normalized_faces),
+            'y2': max(face['y2'] for face in normalized_faces),
+            'faces': normalized_faces,
+        }
+
+    @staticmethod
     def _extract_location(exif_info: dict[str, object]) -> str:
         parts = [
             PhotoSyncService._first_text_value(exif_info.get('city')),
@@ -133,11 +197,12 @@ class PhotoSyncService:
         local_filename: str,
         album_name: str,
         people: list[str] | None = None,
+        face_bounds: dict[str, object] | None = None,
     ) -> dict[str, object]:
         exif_info = asset.get('exifInfo')
         exif = exif_info if isinstance(exif_info, dict) else {}
 
-        return {
+        entry: dict[str, object] = {
             'asset_id': cls._first_text_value(asset.get('id')),
             'original_filename': cls._first_text_value(asset.get('originalFileName')),
             'local_filename': local_filename,
@@ -152,6 +217,9 @@ class PhotoSyncService:
             'people': people if people is not None else cls._extract_people(asset),
             'is_favorite': bool(asset.get('isFavorite')),
         }
+        if face_bounds is not None:
+            entry['face_bounds'] = face_bounds
+        return entry
 
     def _write_manifest(
         self,
@@ -202,12 +270,12 @@ class PhotoSyncService:
             raise last_error
         raise RequestException('GET request failed without exception details')
 
-    def fetch_face_people(
+    def fetch_asset_faces(
         self,
         immich_server_url: str,
         asset_id: str,
         headers: dict[str, str],
-    ) -> list[str]:
+    ) -> list[object]:
         query_string = urlencode({'id': asset_id})
         response = self.get_with_retries(
             url=f'{immich_server_url}/api/faces?{query_string}',
@@ -218,7 +286,8 @@ class PhotoSyncService:
             raise PermissionError('API key does not have access to read face metadata.')
 
         response.raise_for_status()
-        return self._extract_people_from_faces(response.json())
+        faces = response.json()
+        return faces if isinstance(faces, list) else []
 
     def sync_photos(
         self,
@@ -283,13 +352,17 @@ class PhotoSyncService:
                 seen_manifest_filenames.add(local_filename)
 
             people = self._extract_people(asset)
-            if not people and face_metadata_available:
+            face_bounds: dict[str, object] | None = None
+            if face_metadata_available:
                 try:
-                    people = self.fetch_face_people(
+                    faces = self.fetch_asset_faces(
                         immich_server_url=immich_server_url,
                         asset_id=str(asset_id),
                         headers=headers,
                     )
+                    face_bounds = self._extract_face_bounds(faces)
+                    if not people:
+                        people = self._extract_people_from_faces(faces)
                 except PermissionError as error:
                     face_metadata_available = False
                     self.logger.warning('Face metadata disabled: %s', error)
@@ -311,6 +384,7 @@ class PhotoSyncService:
                 local_filename=local_filename,
                 album_name=album_name,
                 people=people,
+                face_bounds=face_bounds,
             )
 
             if local_path.exists():

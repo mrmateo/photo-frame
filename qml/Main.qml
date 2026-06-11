@@ -27,8 +27,88 @@ Window {
     readonly property int overlayRadius: 14
     readonly property color overlayColor: "#73232d3f"
     property string displayedImage: ""
+    property int displayedImageWidth: 0
+    property int displayedImageHeight: 0
+    property bool displayedImageHasFaceBounds: false
+    property real displayedImageFaceX1: 0
+    property real displayedImageFaceY1: 0
+    property real displayedImageFaceX2: 0
+    property real displayedImageFaceY2: 0
     property bool controlsVisible: false
     property bool metadataVisible: false
+
+    function clamp(value, minimum, maximum) {
+        return Math.max(minimum, Math.min(value, maximum))
+    }
+
+    function updateDisplayedImageState() {
+        root.displayedImage = root.backend.currentImage
+        root.displayedImageWidth = root.backend.currentImageWidth
+        root.displayedImageHeight = root.backend.currentImageHeight
+        root.displayedImageHasFaceBounds = root.backend.currentImageHasFaceBounds
+        root.displayedImageFaceX1 = root.backend.currentImageFaceX1
+        root.displayedImageFaceY1 = root.backend.currentImageFaceY1
+        root.displayedImageFaceX2 = root.backend.currentImageFaceX2
+        root.displayedImageFaceY2 = root.backend.currentImageFaceY2
+    }
+
+    function imageSourceClipRect() {
+        var imageWidth = root.displayedImageWidth
+        var imageHeight = root.displayedImageHeight
+        if (imageWidth <= 0 || imageHeight <= 0) {
+            return Qt.rect(0, 0, 0, 0)
+        }
+
+        if (!root.displayedImageHasFaceBounds || root.width <= 0 || root.height <= 0) {
+            return Qt.rect(0, 0, imageWidth, imageHeight)
+        }
+
+        var targetAspect = root.width / root.height
+        var imageAspect = imageWidth / imageHeight
+        var cropWidth = imageWidth
+        var cropHeight = imageHeight
+        if (imageAspect > targetAspect) {
+            cropHeight = imageHeight
+            cropWidth = cropHeight * targetAspect
+        } else {
+            cropWidth = imageWidth
+            cropHeight = cropWidth / targetAspect
+        }
+
+        var faceX1 = root.displayedImageFaceX1 * imageWidth
+        var faceY1 = root.displayedImageFaceY1 * imageHeight
+        var faceX2 = root.displayedImageFaceX2 * imageWidth
+        var faceY2 = root.displayedImageFaceY2 * imageHeight
+        var padding = Math.max(Math.min(imageWidth, imageHeight) * 0.045, Math.max(faceX2 - faceX1, faceY2 - faceY1) * 0.38)
+        var paddedX1 = root.clamp(faceX1 - padding, 0, imageWidth)
+        var paddedY1 = root.clamp(faceY1 - padding, 0, imageHeight)
+        var paddedX2 = root.clamp(faceX2 + padding, 0, imageWidth)
+        var paddedY2 = root.clamp(faceY2 + padding, 0, imageHeight)
+        var focusX = (paddedX1 + paddedX2) / 2
+        var focusY = (paddedY1 + paddedY2) / 2
+
+        var cropX = root.clamp(focusX - cropWidth / 2, 0, imageWidth - cropWidth)
+        var cropY = root.clamp(focusY - cropHeight / 2, 0, imageHeight - cropHeight)
+        if (paddedX1 < cropX) {
+            cropX = paddedX1
+        }
+        if (paddedX2 > cropX + cropWidth) {
+            cropX = paddedX2 - cropWidth
+        }
+        if (paddedY1 < cropY) {
+            cropY = paddedY1
+        }
+        if (paddedY2 > cropY + cropHeight) {
+            cropY = paddedY2 - cropHeight
+        }
+
+        return Qt.rect(
+            root.clamp(cropX, 0, imageWidth - cropWidth),
+            root.clamp(cropY, 0, imageHeight - cropHeight),
+            cropWidth,
+            cropHeight
+        )
+    }
 
     function weatherTemperatureText() {
         var weatherText = root.backend.weatherText
@@ -122,7 +202,8 @@ Window {
         id: photo
         anchors.fill: parent
         source: root.displayedImage
-        fillMode: Image.PreserveAspectCrop
+        sourceClipRect: root.imageSourceClipRect()
+        fillMode: root.displayedImageHasFaceBounds ? Image.Stretch : Image.PreserveAspectCrop
         asynchronous: true
         cache: false
         retainWhileLoading: false
@@ -132,7 +213,7 @@ Window {
         z: -1
 
         Component.onCompleted: {
-            root.displayedImage = root.backend.currentImage
+            root.updateDisplayedImageState()
             opacity = root.displayedImage ? 1.0 : 0.0
         }
     }
@@ -173,7 +254,7 @@ Window {
         duration: 350
         easing.type: Easing.InOutQuad
         onFinished: {
-            root.displayedImage = root.backend.currentImage
+            root.updateDisplayedImageState()
             if (root.displayedImage) {
                 fadeIn.start()
             }

@@ -66,6 +66,13 @@ class PhotoFrameController(QObject):
         self._weather_icon = self._resolve_weather_icon(None)
         self._sync_status = ''
         self._current_photo_details = ''
+        self._current_image_width = 0
+        self._current_image_height = 0
+        self._current_image_has_face_bounds = False
+        self._current_image_face_x1 = 0.0
+        self._current_image_face_y1 = 0.0
+        self._current_image_face_x2 = 0.0
+        self._current_image_face_y2 = 0.0
 
         self._sync_in_progress = False
         self._weather_in_progress = False
@@ -100,6 +107,34 @@ class PhotoFrameController(QObject):
     @Property(str, notify=currentImageChanged)
     def currentImage(self) -> str:
         return self._current_image
+
+    @Property(int, notify=currentImageChanged)
+    def currentImageWidth(self) -> int:
+        return self._current_image_width
+
+    @Property(int, notify=currentImageChanged)
+    def currentImageHeight(self) -> int:
+        return self._current_image_height
+
+    @Property(bool, notify=currentImageChanged)
+    def currentImageHasFaceBounds(self) -> bool:
+        return self._current_image_has_face_bounds
+
+    @Property(float, notify=currentImageChanged)
+    def currentImageFaceX1(self) -> float:
+        return self._current_image_face_x1
+
+    @Property(float, notify=currentImageChanged)
+    def currentImageFaceY1(self) -> float:
+        return self._current_image_face_y1
+
+    @Property(float, notify=currentImageChanged)
+    def currentImageFaceX2(self) -> float:
+        return self._current_image_face_x2
+
+    @Property(float, notify=currentImageChanged)
+    def currentImageFaceY2(self) -> float:
+        return self._current_image_face_y2
 
     @Property(bool, notify=hasImagesChanged)
     def hasImages(self) -> bool:
@@ -165,10 +200,99 @@ class PhotoFrameController(QObject):
 
     def _set_current_image(self, image_path: Path | None) -> None:
         image_url = QUrl.fromLocalFile(str(image_path)).toString() if image_path else ''
+        crop_changed = self._set_current_image_face_bounds(image_path)
         if self._current_image != image_url:
             self._current_image = image_url
             self.currentImageChanged.emit()
+        elif crop_changed:
+            self.currentImageChanged.emit()
         self._set_current_photo_details(self._format_photo_details(image_path))
+
+    @staticmethod
+    def _coerce_normalized_float(value: object) -> float | None:
+        if not isinstance(value, (int, float)):
+            return None
+        return min(max(float(value), 0.0), 1.0)
+
+    def _set_current_image_face_bounds(self, image_path: Path | None) -> bool:
+        image_width = 0
+        image_height = 0
+        has_face_bounds = False
+        face_x1 = 0.0
+        face_y1 = 0.0
+        face_x2 = 0.0
+        face_y2 = 0.0
+
+        if image_path is not None:
+            image_size = self._image_dimensions(image_path)
+            if image_size is not None:
+                image_width, image_height = image_size
+
+            metadata = self._photo_metadata.get(image_path.name)
+            if isinstance(metadata, dict):
+                face_bounds = metadata.get('face_bounds')
+                if isinstance(face_bounds, dict):
+                    x1 = self._coerce_normalized_float(face_bounds.get('x1'))
+                    y1 = self._coerce_normalized_float(face_bounds.get('y1'))
+                    x2 = self._coerce_normalized_float(face_bounds.get('x2'))
+                    y2 = self._coerce_normalized_float(face_bounds.get('y2'))
+
+                    if (
+                        image_size is not None
+                        and x1 is not None
+                        and y1 is not None
+                        and x2 is not None
+                        and y2 is not None
+                        and x2 > x1
+                        and y2 > y1
+                    ):
+                        image_width, image_height = image_size
+                        has_face_bounds = True
+                        face_x1 = x1
+                        face_y1 = y1
+                        face_x2 = x2
+                        face_y2 = y2
+
+        next_state = (
+            image_width,
+            image_height,
+            has_face_bounds,
+            face_x1,
+            face_y1,
+            face_x2,
+            face_y2,
+        )
+        previous_state = (
+            self._current_image_width,
+            self._current_image_height,
+            self._current_image_has_face_bounds,
+            self._current_image_face_x1,
+            self._current_image_face_y1,
+            self._current_image_face_x2,
+            self._current_image_face_y2,
+        )
+        if next_state == previous_state:
+            return False
+
+        self._current_image_width = image_width
+        self._current_image_height = image_height
+        self._current_image_has_face_bounds = has_face_bounds
+        self._current_image_face_x1 = face_x1
+        self._current_image_face_y1 = face_y1
+        self._current_image_face_x2 = face_x2
+        self._current_image_face_y2 = face_y2
+        return True
+
+    @staticmethod
+    def _image_dimensions(image_path: Path) -> tuple[int, int] | None:
+        try:
+            from PIL import Image
+
+            with Image.open(image_path) as image:
+                return image.size
+        except Exception as error:
+            LOGGER.warning('Could not read image dimensions for %s: %s', image_path, error)
+            return None
 
     def _set_has_images(self, has_images: bool) -> None:
         if self._has_images != has_images:
