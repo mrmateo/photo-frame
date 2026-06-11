@@ -27,6 +27,9 @@ Window {
     readonly property int overlayRadius: 14
     readonly property color overlayColor: "#73232d3f"
     property string displayedImage: ""
+    property int displayedImageWidth: 0
+    property int displayedImageHeight: 0
+    property var displayedImageFaces: []
     property bool controlsVisible: false
     property bool metadataVisible: false
 
@@ -89,6 +92,66 @@ Window {
         return Qt.resolvedUrl("../assets/ui/" + fileName)
     }
 
+    function calculateSourceClipRect(imgW, imgH, viewW, viewH, faces) {
+        if (imgW <= 0 || imgH <= 0 || viewW <= 0 || viewH <= 0) {
+            return Qt.rect(0, 0, 0, 0);
+        }
+
+        var targetRatio = viewW / viewH;
+        var imgRatio = imgW / imgH;
+
+        var cropX = 0;
+        var cropY = 0;
+        var cropW = imgW;
+        var cropH = imgH;
+
+        if (imgRatio > targetRatio) {
+            // Landscape image relative to view: crop width
+            cropW = imgH * targetRatio;
+            cropH = imgH;
+            cropY = 0;
+
+            if (faces && faces.length > 0) {
+                var minX = imgW;
+                var maxX = 0;
+                for (var i = 0; i < faces.length; i++) {
+                    var f = faces[i];
+                    minX = Math.min(minX, f.x1);
+                    maxX = Math.max(maxX, f.x2);
+                }
+
+                var facesCenter = (minX + maxX) / 2;
+                cropX = facesCenter - cropW / 2;
+                cropX = Math.max(0, Math.min(imgW - cropW, cropX));
+            } else {
+                cropX = (imgW - cropW) / 2;
+            }
+        } else {
+            // Portrait image relative to view: crop height
+            cropW = imgW;
+            cropH = imgW / targetRatio;
+            cropX = 0;
+
+            if (faces && faces.length > 0) {
+                var minY = imgH;
+                var maxY = 0;
+                for (var j = 0; j < faces.length; j++) {
+                    var f2 = faces[j];
+                    minY = Math.min(minY, f2.y1);
+                    maxY = Math.max(maxY, f2.y2);
+                }
+
+                var facesCenterY = (minY + maxY) / 2;
+                cropY = facesCenterY - cropH / 2;
+                cropY = Math.max(0, Math.min(imgH - cropH, cropY));
+            } else {
+                cropY = (imgH - cropH) / 2;
+            }
+        }
+
+        return Qt.rect(cropX, cropY, cropW, cropH);
+    }
+
     function startPhotoTransition() {
         if (fadeOut.running) {
             return
@@ -128,11 +191,15 @@ Window {
         retainWhileLoading: false
         sourceSize.width: Math.max(1, root.width)
         sourceSize.height: Math.max(1, root.height)
+        sourceClipRect: root.calculateSourceClipRect(root.displayedImageWidth, root.displayedImageHeight, root.width, root.height, root.displayedImageFaces)
         opacity: 1.0
         z: -1
 
         Component.onCompleted: {
             root.displayedImage = root.backend.currentImage
+            root.displayedImageWidth = root.backend.currentImageWidth
+            root.displayedImageHeight = root.backend.currentImageHeight
+            root.displayedImageFaces = root.backend.currentImageFaces
             opacity = root.displayedImage ? 1.0 : 0.0
         }
     }
@@ -174,6 +241,9 @@ Window {
         easing.type: Easing.InOutQuad
         onFinished: {
             root.displayedImage = root.backend.currentImage
+            root.displayedImageWidth = root.backend.currentImageWidth
+            root.displayedImageHeight = root.backend.currentImageHeight
+            root.displayedImageFaces = root.backend.currentImageFaces
             if (root.displayedImage) {
                 fadeIn.start()
             }

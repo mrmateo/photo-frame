@@ -66,6 +66,9 @@ class PhotoFrameController(QObject):
         self._weather_icon = self._resolve_weather_icon(None)
         self._sync_status = ''
         self._current_photo_details = ''
+        self._current_image_width = 0
+        self._current_image_height = 0
+        self._current_image_faces = []
 
         self._sync_in_progress = False
         self._weather_in_progress = False
@@ -100,6 +103,18 @@ class PhotoFrameController(QObject):
     @Property(str, notify=currentImageChanged)
     def currentImage(self) -> str:
         return self._current_image
+
+    @Property(int, notify=currentImageChanged)
+    def currentImageWidth(self) -> int:
+        return self._current_image_width
+
+    @Property(int, notify=currentImageChanged)
+    def currentImageHeight(self) -> int:
+        return self._current_image_height
+
+    @Property(list, notify=currentImageChanged)
+    def currentImageFaces(self) -> list[dict[str, object]]:
+        return self._current_image_faces
 
     @Property(bool, notify=hasImagesChanged)
     def hasImages(self) -> bool:
@@ -164,10 +179,47 @@ class PhotoFrameController(QObject):
         self.executor.shutdown(wait=False, cancel_futures=True)
 
     def _set_current_image(self, image_path: Path | None) -> None:
-        image_url = QUrl.fromLocalFile(str(image_path)).toString() if image_path else ''
+        if image_path:
+            image_url = QUrl.fromLocalFile(str(image_path)).toString()
+            metadata = self._photo_metadata.get(image_path.name)
+            
+            width = 0
+            height = 0
+            faces = []
+            
+            if isinstance(metadata, dict):
+                try:
+                    width = int(metadata.get('width') or 0)
+                    height = int(metadata.get('height') or 0)
+                except (ValueError, TypeError):
+                    pass
+                faces = metadata.get('faces')
+                if not isinstance(faces, list):
+                    faces = []
+            
+            if (width <= 0 or height <= 0) and image_path.exists():
+                from PIL import Image
+                try:
+                    with Image.open(image_path) as img:
+                        width, height = img.size
+                except Exception as error:
+                    LOGGER.warning('Failed to read dimensions using Pillow for %s: %s', image_path, error)
+            
+            self._current_image_width = width
+            self._current_image_height = height
+            self._current_image_faces = faces
+        else:
+            image_url = ''
+            self._current_image_width = 0
+            self._current_image_height = 0
+            self._current_image_faces = []
+
         if self._current_image != image_url:
             self._current_image = image_url
             self.currentImageChanged.emit()
+        else:
+            self.currentImageChanged.emit()
+            
         self._set_current_photo_details(self._format_photo_details(image_path))
 
     def _set_has_images(self, has_images: bool) -> None:

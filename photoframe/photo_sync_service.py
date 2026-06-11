@@ -102,20 +102,79 @@ class PhotoSyncService:
         return names
 
     @staticmethod
-    def _extract_people_from_faces(faces: object) -> list[str]:
-        if not isinstance(faces, list):
-            return []
+    def _extract_faces_metadata(faces_json: object, asset_width: int, asset_height: int) -> tuple[list[str], list[dict[str, object]]]:
+        if not isinstance(faces_json, list):
+            return [], []
 
-        people: list[object] = []
-        for face in faces:
+        people_names: list[str] = []
+        seen_names: set[str] = set()
+        faces_list: list[dict[str, object]] = []
+
+        for face in faces_json:
             if not isinstance(face, dict):
                 continue
 
             person = face.get('person')
+            name = ''
+            is_hidden = False
             if isinstance(person, dict):
-                people.append(person)
+                raw_name = person.get('name')
+                if isinstance(raw_name, str):
+                    name = raw_name.strip()
+                is_hidden = bool(person.get('isHidden'))
 
-        return PhotoSyncService._extract_people_from_person_items(people)
+            if name and not is_hidden:
+                name_key = name.casefold()
+                if name_key not in seen_names:
+                    people_names.append(name)
+                    seen_names.add(name_key)
+
+            x1_raw = face.get('boundingBoxX1')
+            y1_raw = face.get('boundingBoxY1')
+            x2_raw = face.get('boundingBoxX2')
+            y2_raw = face.get('boundingBoxY2')
+
+            if x1_raw is None or y1_raw is None or x2_raw is None or y2_raw is None:
+                continue
+
+            try:
+                x1 = float(x1_raw)
+                y1 = float(y1_raw)
+                x2 = float(x2_raw)
+                y2 = float(y2_raw)
+            except (ValueError, TypeError):
+                continue
+
+            try:
+                width = int(face.get('imageWidth') or asset_width)
+                height = int(face.get('imageHeight') or asset_height)
+            except (ValueError, TypeError):
+                width = asset_width or 1
+                height = asset_height or 1
+
+            if 0.0 <= x1 <= 1.0 and 0.0 <= x2 <= 1.0 and width > 1:
+                x1 = int(round(x1 * width))
+                x2 = int(round(x2 * width))
+            else:
+                x1 = int(round(x1))
+                x2 = int(round(x2))
+
+            if 0.0 <= y1 <= 1.0 and 0.0 <= y2 <= 1.0 and height > 1:
+                y1 = int(round(y1 * height))
+                y2 = int(round(y2 * height))
+            else:
+                y1 = int(round(y1))
+                y2 = int(round(y2))
+
+            faces_list.append({
+                'name': name if (name and not is_hidden) else '',
+                'x1': x1,
+                'y1': y1,
+                'x2': x2,
+                'y2': y2,
+            })
+
+        return people_names, faces_list
 
     @staticmethod
     def _extract_location(exif_info: dict[str, object]) -> str:
@@ -133,9 +192,19 @@ class PhotoSyncService:
         local_filename: str,
         album_name: str,
         people: list[str] | None = None,
+        faces: list[dict[str, object]] | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> dict[str, object]:
         exif_info = asset.get('exifInfo')
         exif = exif_info if isinstance(exif_info, dict) else {}
+
+        try:
+            w = int(width or asset.get('width') or 0)
+            h = int(height or asset.get('height') or 0)
+        except (ValueError, TypeError):
+            w = 0
+            h = 0
 
         return {
             'asset_id': cls._first_text_value(asset.get('id')),
@@ -150,6 +219,9 @@ class PhotoSyncService:
             'location': cls._extract_location(exif),
             'album': album_name,
             'people': people if people is not None else cls._extract_people(asset),
+            'faces': faces if faces is not None else [],
+            'width': w,
+            'height': h,
             'is_favorite': bool(asset.get('isFavorite')),
         }
 
@@ -202,12 +274,14 @@ class PhotoSyncService:
             raise last_error
         raise RequestException('GET request failed without exception details')
 
-    def fetch_face_people(
+    def fetch_faces_metadata(
         self,
         immich_server_url: str,
         asset_id: str,
         headers: dict[str, str],
-    ) -> list[str]:
+        asset_width: int,
+        asset_height: int,
+    ) -> tuple[list[str], list[dict[str, object]]]:
         query_string = urlencode({'id': asset_id})
         response = self.get_with_retries(
             url=f'{immich_server_url}/api/faces?{query_string}',
@@ -218,7 +292,7 @@ class PhotoSyncService:
             raise PermissionError('API key does not have access to read face metadata.')
 
         response.raise_for_status()
-        return self._extract_people_from_faces(response.json())
+        return self._extract_faces_metadata(response.json(), asset_width, asset_height)
 
     def sync_photos(
         self,
@@ -282,14 +356,27 @@ class PhotoSyncService:
                 manifest_order.append(local_filename)
                 seen_manifest_filenames.add(local_filename)
 
+            try:
+                width = int(asset.get('width') or 0)
+                height = int(asset.get('height') or 0)
+            except (ValueError, TypeError):
+                width = 0
+                height = 0
+
             people = self._extract_people(asset)
-            if not people and face_metadata_available:
+            faces = []
+            if face_metadata_available:
                 try:
-                    people = self.fetch_face_people(
+                    people_from_faces, faces_from_faces = self.fetch_faces_metadata(
                         immich_server_url=immich_server_url,
                         asset_id=str(asset_id),
                         headers=headers,
+                        asset_width=width,
+                        asset_height=height,
                     )
+                    if people_from_faces:
+                        people = people_from_faces
+                    faces = faces_from_faces
                 except PermissionError as error:
                     face_metadata_available = False
                     self.logger.warning('Face metadata disabled: %s', error)
@@ -311,6 +398,9 @@ class PhotoSyncService:
                 local_filename=local_filename,
                 album_name=album_name,
                 people=people,
+                faces=faces,
+                width=width,
+                height=height,
             )
 
             if local_path.exists():
