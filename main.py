@@ -17,6 +17,7 @@ APP_DIR = Path(__file__).resolve().parent
 DEFAULT_LOCAL_CONFIG_PATH = APP_DIR / 'config.json'
 DEFAULT_ENV_CONFIG_KEY = 'PHOTO_FRAME_CONFIG'
 TOUCH_DEBUG_ENV_KEY = 'PHOTO_FRAME_TOUCH_DEBUG'
+TOUCH_ROTATION_ENV_KEY = 'PHOTO_FRAME_TOUCH_ROTATION'
 RESOURCE_QML_URL = QUrl('qrc:/qml/Main.qml')
 RESOURCE_WEATHER_ICON_BASE = 'qrc:/assets/weather'
 
@@ -72,6 +73,18 @@ def parse_window_size(raw_value: str) -> tuple[int, int]:
 
 def env_flag_enabled(key: str) -> bool:
     return os.environ.get(key, '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def parse_touch_rotation(raw_value: str) -> int:
+    normalized = (raw_value or '0').strip()
+    try:
+        rotation = int(normalized)
+    except ValueError as error:
+        raise ValueError('--touch-rotation must be one of: 0, 180') from error
+
+    if rotation not in {0, 180}:
+        raise ValueError('--touch-rotation must be one of: 0, 180')
+    return rotation
 
 
 def resolve_config_path(explicit_path: str, demo_mode: bool) -> Path | None:
@@ -151,6 +164,12 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
         ['touch-debug'],
         'Show touch coordinate diagnostics overlay.',
     )
+    touch_rotation_option = QCommandLineOption(
+        ['touch-rotation'],
+        'Rotate app touch handling by degrees. Supported values: 0, 180.',
+        'degrees',
+        '0',
+    )
 
     parser.addOption(config_option)
     parser.addOption(demo_mode_option)
@@ -159,6 +178,7 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
     parser.addOption(size_option)
     parser.addOption(verbose_option)
     parser.addOption(touch_debug_option)
+    parser.addOption(touch_rotation_option)
 
     return parser, {
         'config': config_option,
@@ -168,6 +188,7 @@ def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
         'size': size_option,
         'verbose': verbose_option,
         'touch_debug': touch_debug_option,
+        'touch_rotation': touch_rotation_option,
     }
 
 
@@ -195,6 +216,9 @@ def main() -> int:
     try:
         auto_exit_seconds = parse_auto_exit_seconds(parser.value(options['auto_exit']))
         window_width, window_height = parse_window_size(parser.value(options['size']))
+        touch_rotation = parse_touch_rotation(
+            os.environ.get(TOUCH_ROTATION_ENV_KEY, parser.value(options['touch_rotation']))
+        )
         config_path = resolve_config_path(parser.value(options['config']), demo_mode=demo_mode)
         config = AppConfig.demo(APP_DIR) if config_path is None else AppConfig.from_file(config_path)
     except (ValueError, FileNotFoundError) as error:
@@ -229,6 +253,8 @@ def main() -> int:
         logger.info('Running with demo config.')
     if touch_debug:
         logger.info('Touch debug overlay enabled.')
+    if touch_rotation:
+        logger.info('Touch handling rotation enabled: %s degrees.', touch_rotation)
 
     engine = QQmlApplicationEngine()
     engine.objectCreationFailed.connect(
@@ -248,6 +274,7 @@ def main() -> int:
             'initialWidth': window_width,
             'initialHeight': window_height,
             'touchDebugEnabled': touch_debug,
+            'touchRotation': touch_rotation,
         }
     )
     engine.load(qml_url)

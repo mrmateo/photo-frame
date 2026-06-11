@@ -10,6 +10,7 @@ Window {
     property int initialWidth: 1280
     property int initialHeight: 720
     property bool touchDebugEnabled: false
+    property int touchRotation: 0
 
     width: initialWidth
     height: initialHeight
@@ -76,20 +77,40 @@ Window {
         return x < root.width * 0.50 ? "previous" : "next"
     }
 
-    function recordTouch(source, phase, x, y, routedZone) {
+    function correctedTouchPoint(rawX, rawY) {
+        if (root.touchRotation === 180) {
+            return Qt.point(root.width - rawX, root.height - rawY)
+        }
+
+        return Qt.point(rawX, rawY)
+    }
+
+    function pointInItem(item, x, y) {
+        const origin = item.mapToItem(root, 0, 0)
+        return x >= origin.x
+            && x <= origin.x + item.width
+            && y >= origin.y
+            && y <= origin.y + item.height
+    }
+
+    function recordTouch(source, phase, rawX, rawY, routedZone) {
         if (!root.touchDebugEnabled) {
             return
         }
 
+        const point = root.correctedTouchPoint(rawX, rawY)
         root.touchDebugSeen = true
-        root.touchDebugX = Math.round(x)
-        root.touchDebugY = Math.round(y)
+        root.touchDebugX = Math.round(point.x)
+        root.touchDebugY = Math.round(point.y)
 
         const line = phase + " " + source
             + " x=" + root.touchDebugX
             + " y=" + root.touchDebugY
+            + (root.touchRotation === 180
+                ? " raw=" + Math.round(rawX) + "," + Math.round(rawY)
+                : "")
             + " size=" + Math.round(root.width) + "x" + Math.round(root.height)
-            + " zone=" + root.touchZone(x, y)
+            + " zone=" + root.touchZone(point.x, point.y)
             + (routedZone ? " routed=" + routedZone : "")
 
         if (phase === "press") {
@@ -98,6 +119,38 @@ Window {
             root.touchDebugClickText = line
         }
         console.log("touch-debug " + line)
+    }
+
+    function routeCorrectedClick(rawX, rawY) {
+        const point = root.correctedTouchPoint(rawX, rawY)
+
+        if (statusPanel.visible && root.pointInItem(statusPanel, point.x, point.y)) {
+            return "blocked status"
+        }
+
+        if (root.metadataVisible
+                && root.backend.currentPhotoDetails.length > 0
+                && root.pointInItem(metadataPanel, point.x, point.y)) {
+            return "blocked metadata"
+        }
+
+        if (root.pointInItem(syncButton, point.x, point.y)) {
+            if (root.backend.syncEnabled) {
+                root.backend.syncNow()
+            }
+            return "sync"
+        }
+
+        if (root.pointInItem(shutdownButton, point.x, point.y)) {
+            root.backend.shutdownNow()
+            return "shutdown"
+        }
+
+        if (root.pointInItem(infoPanel, point.x, point.y)) {
+            return "blocked info"
+        }
+
+        return root.routePhotoClick(point.x, point.y)
     }
 
     function routePhotoClick(x, y) {
@@ -209,6 +262,7 @@ Window {
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton
+        enabled: root.touchRotation === 0
         z: -0.5
 
         onPressed: (mouse) => {
@@ -243,6 +297,7 @@ Window {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
+            enabled: root.touchRotation === 0
 
             onPressed: (mouse) => {
                 const point = statusPanel.mapToItem(root, mouse.x, mouse.y)
@@ -291,7 +346,8 @@ Window {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
-            enabled: root.metadataVisible
+            enabled: root.touchRotation === 0
+                && root.metadataVisible
                 && root.backend.currentPhotoDetails.length > 0
 
             onPressed: (mouse) => {
@@ -321,6 +377,7 @@ Window {
         MouseArea {
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
+            enabled: root.touchRotation === 0
 
             onPressed: (mouse) => {
                 const point = infoPanel.mapToItem(root, mouse.x, mouse.y)
@@ -442,6 +499,22 @@ Window {
                     }
                 }
             }
+        }
+    }
+
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton
+        enabled: root.touchRotation === 180
+        z: 90
+
+        onPressed: (mouse) => {
+            root.recordTouch("corrected touch", "press", mouse.x, mouse.y, "")
+        }
+
+        onClicked: (mouse) => {
+            const routedZone = root.routeCorrectedClick(mouse.x, mouse.y)
+            root.recordTouch("corrected touch", "click", mouse.x, mouse.y, routedZone)
         }
     }
 
