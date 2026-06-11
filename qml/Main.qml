@@ -37,10 +37,6 @@ Window {
     property bool controlsVisible: false
     property bool metadataVisible: false
 
-    function clamp(value, minimum, maximum) {
-        return Math.max(minimum, Math.min(value, maximum))
-    }
-
     function updateDisplayedImageState() {
         root.displayedImage = root.backend.currentImage
         root.displayedImageWidth = root.backend.currentImageWidth
@@ -52,62 +48,54 @@ Window {
         root.displayedImageFaceY2 = root.backend.currentImageFaceY2
     }
 
-    function imageSourceClipRect() {
-        var imageWidth = root.displayedImageWidth
-        var imageHeight = root.displayedImageHeight
-        if (imageWidth <= 0 || imageHeight <= 0) {
-            return Qt.rect(0, 0, 0, 0)
+    function photoHorizontalAlignment() {
+        if (!root.displayedImageHasFaceBounds || root.displayedImageWidth <= 0
+                || root.displayedImageHeight <= 0 || root.width <= 0 || root.height <= 0) {
+            return Image.AlignHCenter
         }
 
-        if (!root.displayedImageHasFaceBounds || root.width <= 0 || root.height <= 0) {
-            return Qt.rect(0, 0, imageWidth, imageHeight)
-        }
-
+        var imageAspect = root.displayedImageWidth / root.displayedImageHeight
         var targetAspect = root.width / root.height
-        var imageAspect = imageWidth / imageHeight
-        var cropWidth = imageWidth
-        var cropHeight = imageHeight
-        if (imageAspect > targetAspect) {
-            cropHeight = imageHeight
-            cropWidth = cropHeight * targetAspect
-        } else {
-            cropWidth = imageWidth
-            cropHeight = cropWidth / targetAspect
+        if (imageAspect <= targetAspect) {
+            return Image.AlignHCenter
         }
 
-        var faceX1 = root.displayedImageFaceX1 * imageWidth
-        var faceY1 = root.displayedImageFaceY1 * imageHeight
-        var faceX2 = root.displayedImageFaceX2 * imageWidth
-        var faceY2 = root.displayedImageFaceY2 * imageHeight
-        var padding = Math.max(Math.min(imageWidth, imageHeight) * 0.045, Math.max(faceX2 - faceX1, faceY2 - faceY1) * 0.38)
-        var paddedX1 = root.clamp(faceX1 - padding, 0, imageWidth)
-        var paddedY1 = root.clamp(faceY1 - padding, 0, imageHeight)
-        var paddedX2 = root.clamp(faceX2 + padding, 0, imageWidth)
-        var paddedY2 = root.clamp(faceY2 + padding, 0, imageHeight)
-        var focusX = (paddedX1 + paddedX2) / 2
-        var focusY = (paddedY1 + paddedY2) / 2
+        var visibleWidth = targetAspect / imageAspect
+        var centerCropLeft = (1.0 - visibleWidth) / 2.0
+        var centerCropRight = centerCropLeft + visibleWidth
+        var padding = Math.min(0.08, Math.max(0.035, (root.displayedImageFaceX2 - root.displayedImageFaceX1) * 0.32))
+        if (root.displayedImageFaceX1 < centerCropLeft + padding) {
+            return Image.AlignLeft
+        }
+        if (root.displayedImageFaceX2 > centerCropRight - padding) {
+            return Image.AlignRight
+        }
+        return Image.AlignHCenter
+    }
 
-        var cropX = root.clamp(focusX - cropWidth / 2, 0, imageWidth - cropWidth)
-        var cropY = root.clamp(focusY - cropHeight / 2, 0, imageHeight - cropHeight)
-        if (paddedX1 < cropX) {
-            cropX = paddedX1
-        }
-        if (paddedX2 > cropX + cropWidth) {
-            cropX = paddedX2 - cropWidth
-        }
-        if (paddedY1 < cropY) {
-            cropY = paddedY1
-        }
-        if (paddedY2 > cropY + cropHeight) {
-            cropY = paddedY2 - cropHeight
+    function photoVerticalAlignment() {
+        if (!root.displayedImageHasFaceBounds || root.displayedImageWidth <= 0
+                || root.displayedImageHeight <= 0 || root.width <= 0 || root.height <= 0) {
+            return Image.AlignVCenter
         }
 
-        return Qt.rect(
-            root.clamp(cropX, 0, imageWidth - cropWidth),
-            root.clamp(cropY, 0, imageHeight - cropHeight),
-            cropWidth,
-            cropHeight
-        )
+        var imageAspect = root.displayedImageWidth / root.displayedImageHeight
+        var targetAspect = root.width / root.height
+        if (imageAspect >= targetAspect) {
+            return Image.AlignVCenter
+        }
+
+        var visibleHeight = imageAspect / targetAspect
+        var centerCropTop = (1.0 - visibleHeight) / 2.0
+        var centerCropBottom = centerCropTop + visibleHeight
+        var padding = Math.min(0.08, Math.max(0.035, (root.displayedImageFaceY2 - root.displayedImageFaceY1) * 0.32))
+        if (root.displayedImageFaceY1 < centerCropTop + padding) {
+            return Image.AlignTop
+        }
+        if (root.displayedImageFaceY2 > centerCropBottom - padding) {
+            return Image.AlignBottom
+        }
+        return Image.AlignVCenter
     }
 
     function weatherTemperatureText() {
@@ -202,8 +190,9 @@ Window {
         id: photo
         anchors.fill: parent
         source: root.displayedImage
-        sourceClipRect: root.imageSourceClipRect()
-        fillMode: root.displayedImageHasFaceBounds ? Image.Stretch : Image.PreserveAspectCrop
+        fillMode: Image.PreserveAspectCrop
+        horizontalAlignment: root.photoHorizontalAlignment()
+        verticalAlignment: root.photoVerticalAlignment()
         asynchronous: true
         cache: false
         retainWhileLoading: false
