@@ -200,20 +200,34 @@ Window {
     }
 
     Rectangle {
+        id: bottomScrim
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: root.isPortrait ? Math.min(root.height * 0.46, 420) : Math.min(root.height * 0.40, 300)
+        z: 0
+        gradient: Gradient {
+            orientation: Gradient.Vertical
+            GradientStop { position: 0.0; color: "#00000000" }
+            GradientStop { position: 0.48; color: "#3d000000" }
+            GradientStop { position: 1.0; color: "#b8000000" }
+        }
+    }
+
+    Item {
         id: infoPanel
         width: root.isPortrait ? Math.min(root.width * 0.88, 700) : Math.min(root.width * 0.60, 520)
         height: root.isPortrait ? 220 : 166
         anchors.horizontalCenter: root.isPortrait ? parent.horizontalCenter : undefined
         anchors.left: root.isPortrait ? undefined : parent.left
-        anchors.leftMargin: root.isPortrait ? 0 : 20
+        anchors.leftMargin: root.isPortrait ? 0 : 34
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: root.isPortrait ? 24 : 14
-        radius: 16
-        color: "#6f0c1320"
+        anchors.bottomMargin: root.isPortrait ? 30 : 26
+        z: 1
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 14
+            anchors.margins: 0
             spacing: root.isPortrait ? 3 : 1
 
             Text {
@@ -221,6 +235,8 @@ Window {
                 color: "#ffffff"
                 font.pixelSize: root.isPortrait ? 68 : 56
                 font.bold: true
+                style: Text.Raised
+                styleColor: "#8a000000"
             }
 
             Text {
@@ -228,6 +244,8 @@ Window {
                 color: "#d4deea"
                 Layout.topMargin: -6
                 font.pixelSize: root.isPortrait ? 26 : 21
+                style: Text.Raised
+                styleColor: "#85000000"
             }
 
             RowLayout {
@@ -248,6 +266,8 @@ Window {
                     color: "#ecf6ff"
                     font.pixelSize: root.isPortrait ? 28 : 24
                     elide: Text.ElideRight
+                    style: Text.Raised
+                    styleColor: "#85000000"
                 }
 
                 BusyIndicator {
