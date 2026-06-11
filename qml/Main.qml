@@ -26,6 +26,36 @@ Window {
     property string displayedImage: ""
     property bool metadataVisible: false
 
+    function weatherTemperatureText() {
+        var weatherText = root.backend.weatherText
+        var legacyMatch = weatherText.match(/^(-?\d+)\s*[FC]\s*\|\s*(.+)$/)
+        if (legacyMatch) {
+            return legacyMatch[1] + "°"
+        }
+
+        var degreeMatch = weatherText.match(/^(-?\d+°)\s+(.+)$/)
+        if (degreeMatch) {
+            return degreeMatch[1]
+        }
+
+        return ""
+    }
+
+    function weatherConditionText() {
+        var weatherText = root.backend.weatherText
+        var legacyMatch = weatherText.match(/^(-?\d+)\s*[FC]\s*\|\s*(.+)$/)
+        if (legacyMatch) {
+            return legacyMatch[2]
+        }
+
+        var degreeMatch = weatherText.match(/^(-?\d+°)\s+(.+)$/)
+        if (degreeMatch) {
+            return degreeMatch[2]
+        }
+
+        return weatherText
+    }
+
     function uiIconSource(fileName) {
         if (useQrcAssets) {
             return "qrc:/assets/ui/" + fileName
@@ -234,7 +264,7 @@ Window {
                 text: root.backend.clockText
                 color: "#ffffff"
                 font.pixelSize: root.isPortrait ? 68 : 56
-                font.bold: true
+                font.weight: Font.DemiBold
                 style: Text.Raised
                 styleColor: "#8a000000"
             }
@@ -250,21 +280,35 @@ Window {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: root.isPortrait ? 8 : 10
+                Layout.topMargin: root.isPortrait ? 6 : 4
+                spacing: root.isPortrait ? 10 : 12
 
                 VectorImage {
                     source: root.backend.weatherIcon
-                    Layout.preferredWidth: root.isPortrait ? 38 : 40
-                    Layout.preferredHeight: root.isPortrait ? 38 : 40
+                    Layout.preferredWidth: root.isPortrait ? 34 : 36
+                    Layout.preferredHeight: root.isPortrait ? 34 : 36
+                    Layout.alignment: Qt.AlignVCenter
                     fillMode: VectorImage.PreserveAspectFit
                     animations.loops: Animation.Infinite
                 }
 
                 Text {
+                    text: root.weatherTemperatureText()
+                    color: "#ffffff"
+                    visible: text.length > 0
+                    font.pixelSize: root.isPortrait ? 31 : 27
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                    style: Text.Raised
+                    styleColor: "#85000000"
+                }
+
+                Text {
                     Layout.fillWidth: true
-                    text: root.backend.weatherText
-                    color: "#ecf6ff"
-                    font.pixelSize: root.isPortrait ? 28 : 24
+                    text: root.weatherConditionText()
+                    color: "#e5edf6"
+                    font.pixelSize: root.isPortrait ? 25 : 22
+                    font.weight: Font.Normal
                     elide: Text.ElideRight
                     style: Text.Raised
                     styleColor: "#85000000"

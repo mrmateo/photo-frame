@@ -19,6 +19,7 @@ from .weather_types import UNKNOWN_WEATHER_ICON_KEY, WEATHER_ICON_EXTENSION, wea
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 SYNC_STATUS_CLEAR_MS = 10_000
+DEMO_WEATHER_TEXT = '88°  Partly Cloudy'
 
 
 class PhotoFrameController(QObject):
@@ -149,7 +150,7 @@ class PhotoFrameController(QObject):
         self._sync_timer.start(hourly_interval_ms)
 
         if self.demo_mode:
-            self._set_weather_text('Demo mode weather')
+            self._set_weather_text(DEMO_WEATHER_TEXT)
             self._set_sync_status('Demo mode: network calls disabled.', auto_clear_ms=SYNC_STATUS_CLEAR_MS)
             return
 
@@ -440,8 +441,8 @@ class PhotoFrameController(QObject):
     @Slot()
     def refreshWeather(self) -> None:
         if self.demo_mode:
-            self._set_weather_text('Demo mode weather')
-            self._set_weather_icon(self._resolve_weather_icon('sunny'))
+            self._set_weather_text(DEMO_WEATHER_TEXT)
+            self._set_weather_icon(self._resolve_weather_icon('partlycloudy'))
             return
 
         if self._weather_in_progress:

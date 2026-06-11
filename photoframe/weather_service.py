@@ -52,7 +52,7 @@ class WeatherService:
                 temperature = round(data['attributes']['temperature'])
                 condition = str(data['state'])
                 weather = format_weather_condition(condition)
-                return WeatherSnapshot(text=f'{temperature} F  |  {weather}', condition=condition)
+                return WeatherSnapshot(text=f'{temperature}°  {weather}', condition=condition)
             except (requests.RequestException, ValueError, KeyError, TypeError) as error:
                 last_error = error
                 if attempt < self.request_retries - 1:
