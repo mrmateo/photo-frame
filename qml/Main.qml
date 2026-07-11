@@ -27,6 +27,7 @@ Window {
     readonly property int overlayRadius: 14
     readonly property color overlayColor: "#73232d3f"
     property string displayedImage: ""
+    property var displayedCropInfo: ({})
     property bool controlsVisible: false
     property bool metadataVisible: false
 
@@ -118,21 +119,101 @@ Window {
         controlsHideTimer.restart()
     }
 
+    function clamp(value, minimum, maximum) {
+        return Math.max(minimum, Math.min(maximum, value))
+    }
+
+    function cropAxis(faceStart, faceEnd, cropLength) {
+        var centeredStart = ((faceStart + faceEnd) / 2.0) - (cropLength / 2.0)
+        var groupLength = faceEnd - faceStart
+
+        if (groupLength <= cropLength) {
+            // Keep every face inside the crop when geometry makes that possible.
+            var minimumStart = faceEnd - cropLength
+            var maximumStart = faceStart
+            centeredStart = root.clamp(centeredStart, minimumStart, maximumStart)
+        }
+
+        return root.clamp(centeredStart, 0.0, 1.0 - cropLength)
+    }
+
+    function smartCropRect() {
+        var bounds = root.displayedCropInfo
+        if (!bounds || bounds.left === undefined || root.width <= 0 || root.height <= 0) {
+            return Qt.rect(0, 0, 0, 0)
+        }
+
+        var originalWidth = bounds.image_width
+        var originalHeight = bounds.image_height
+        if (originalWidth <= 0 || originalHeight <= 0) {
+            return Qt.rect(0, 0, 0, 0)
+        }
+
+        var viewportRatio = root.width / root.height
+        var imageRatio = originalWidth / originalHeight
+        var imageWidth = imageRatio > viewportRatio ? root.height * imageRatio : root.width
+        var imageHeight = imageRatio > viewportRatio ? root.height : root.width / imageRatio
+        var cropLeft = 0.0
+        var cropTop = 0.0
+        var cropWidth = 1.0
+        var cropHeight = 1.0
+
+        if (imageRatio > viewportRatio) {
+            cropWidth = viewportRatio / imageRatio
+            cropLeft = root.cropAxis(bounds.left, bounds.right, cropWidth)
+        } else if (imageRatio < viewportRatio) {
+            cropHeight = imageRatio / viewportRatio
+            cropTop = root.cropAxis(bounds.top, bounds.bottom, cropHeight)
+        }
+
+        return Qt.rect(
+            cropLeft * imageWidth,
+            cropTop * imageHeight,
+            cropWidth * imageWidth,
+            cropHeight * imageHeight
+        )
+    }
+
+    function smartSourceWidth() {
+        var bounds = root.displayedCropInfo
+        if (!bounds || !bounds.image_width || !bounds.image_height) {
+            return Math.max(1, root.width)
+        }
+        var imageRatio = bounds.image_width / bounds.image_height
+        var viewportRatio = root.width / root.height
+        return Math.max(1, imageRatio > viewportRatio ? root.height * imageRatio : root.width)
+    }
+
+    function smartSourceHeight() {
+        var bounds = root.displayedCropInfo
+        if (!bounds || !bounds.image_width || !bounds.image_height) {
+            return Math.max(1, root.height)
+        }
+        var imageRatio = bounds.image_width / bounds.image_height
+        var viewportRatio = root.width / root.height
+        return Math.max(1, imageRatio > viewportRatio ? root.height : root.width / imageRatio)
+    }
+
     Image {
         id: photo
         anchors.fill: parent
         source: root.displayedImage
         fillMode: Image.PreserveAspectCrop
+        sourceClipRect: root.smartCropRect()
         asynchronous: true
         cache: false
         retainWhileLoading: false
-        sourceSize.width: Math.max(1, root.width)
-        sourceSize.height: Math.max(1, root.height)
+        // sourceClipRect uses coordinates in the sourceSize-scaled image. Keep
+        // the full image's aspect ratio here so normalized Immich coordinates
+        // map to the right pixels while Qt still decodes only display-sized data.
+        sourceSize.width: root.smartSourceWidth()
+        sourceSize.height: root.smartSourceHeight()
         opacity: 1.0
         z: -1
 
         Component.onCompleted: {
             root.displayedImage = root.backend.currentImage
+            root.displayedCropInfo = root.backend.currentCropInfo
             opacity = root.displayedImage ? 1.0 : 0.0
         }
     }
@@ -174,6 +255,7 @@ Window {
         easing.type: Easing.InOutQuad
         onFinished: {
             root.displayedImage = root.backend.currentImage
+            root.displayedCropInfo = root.backend.currentCropInfo
             if (root.displayedImage) {
                 fadeIn.start()
             }

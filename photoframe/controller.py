@@ -32,6 +32,7 @@ class PhotoFrameController(QObject):
     syncStatusChanged = Signal()
     syncInProgressChanged = Signal()
     currentPhotoDetailsChanged = Signal()
+    currentCropInfoChanged = Signal()
 
     syncProgressSignal = Signal(str)
     syncFinishedSignal = Signal(object, str)
@@ -66,6 +67,7 @@ class PhotoFrameController(QObject):
         self._weather_icon = self._resolve_weather_icon(None)
         self._sync_status = ''
         self._current_photo_details = ''
+        self._current_crop_info: dict[str, object] = {}
 
         self._sync_in_progress = False
         self._weather_in_progress = False
@@ -137,6 +139,10 @@ class PhotoFrameController(QObject):
     def currentPhotoDetails(self) -> str:
         return self._current_photo_details
 
+    @Property('QVariantMap', notify=currentCropInfoChanged)
+    def currentCropInfo(self) -> dict[str, object]:
+        return self._current_crop_info
+
     @Slot()
     def start(self) -> None:
         self.photos_path.mkdir(parents=True, exist_ok=True)
@@ -165,10 +171,31 @@ class PhotoFrameController(QObject):
 
     def _set_current_image(self, image_path: Path | None) -> None:
         image_url = QUrl.fromLocalFile(str(image_path)).toString() if image_path else ''
+        self._set_current_crop_info(self._crop_info_for_image(image_path))
         if self._current_image != image_url:
             self._current_image = image_url
             self.currentImageChanged.emit()
         self._set_current_photo_details(self._format_photo_details(image_path))
+
+    def _set_current_crop_info(self, value: dict[str, object]) -> None:
+        if self._current_crop_info != value:
+            self._current_crop_info = value
+            self.currentCropInfoChanged.emit()
+
+    def _crop_info_for_image(self, image_path: Path | None) -> dict[str, object]:
+        if image_path is None:
+            return {}
+        metadata = self._photo_metadata.get(image_path.name)
+        if not isinstance(metadata, dict):
+            return {}
+        bounds = metadata.get('face_bounds')
+        if not isinstance(bounds, dict):
+            return {}
+
+        required_keys = ('left', 'top', 'right', 'bottom', 'image_width', 'image_height')
+        if not all(isinstance(bounds.get(key), (int, float)) for key in required_keys):
+            return {}
+        return {key: float(bounds[key]) for key in required_keys}
 
     def _set_has_images(self, has_images: bool) -> None:
         if self._has_images != has_images:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from io import BytesIO
@@ -103,19 +104,72 @@ class PhotoSyncService:
 
     @staticmethod
     def _extract_people_from_faces(faces: object) -> list[str]:
-        if not isinstance(faces, list):
+        face_items = PhotoSyncService._face_items(faces)
+        if not face_items:
             return []
 
         people: list[object] = []
-        for face in faces:
-            if not isinstance(face, dict):
-                continue
-
+        for face in face_items:
             person = face.get('person')
             if isinstance(person, dict):
                 people.append(person)
 
         return PhotoSyncService._extract_people_from_person_items(people)
+
+    @staticmethod
+    def _face_items(faces: object) -> list[dict[str, object]]:
+        if isinstance(faces, dict):
+            faces = faces.get('faces')
+        if not isinstance(faces, list):
+            return []
+        return [face for face in faces if isinstance(face, dict)]
+
+    @staticmethod
+    def _number(value: object, *, allow_zero: bool = False) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        minimum_is_valid = number >= 0 if allow_zero else number > 0
+        return number if math.isfinite(number) and minimum_is_valid else None
+
+    @classmethod
+    def _extract_face_bounds(cls, faces: object) -> dict[str, object] | None:
+        """Return one bounding rectangle containing every detected face."""
+        valid_faces: list[tuple[float, float, float, float, float, float]] = []
+        for face in cls._face_items(faces):
+            image_width = cls._number(face.get('imageWidth'))
+            image_height = cls._number(face.get('imageHeight'))
+            x1 = cls._number(face.get('boundingBoxX1'), allow_zero=True)
+            y1 = cls._number(face.get('boundingBoxY1'), allow_zero=True)
+            x2 = cls._number(face.get('boundingBoxX2'))
+            y2 = cls._number(face.get('boundingBoxY2'))
+
+            if None in (image_width, image_height, x1, y1, x2, y2):
+                continue
+            assert image_width is not None and image_height is not None
+            assert x1 is not None and y1 is not None and x2 is not None and y2 is not None
+            if x2 <= x1 or y2 <= y1 or x2 > image_width or y2 > image_height:
+                continue
+            valid_faces.append((x1, y1, x2, y2, image_width, image_height))
+
+        if not valid_faces:
+            return None
+
+        # Immich normally reports a common source size. Normalize first so a
+        # malformed or mixed response cannot skew the aggregate bounds.
+        normalized = [
+            (x1 / width, y1 / height, x2 / width, y2 / height)
+            for x1, y1, x2, y2, width, height in valid_faces
+        ]
+        return {
+            'left': min(face[0] for face in normalized),
+            'top': min(face[1] for face in normalized),
+            'right': max(face[2] for face in normalized),
+            'bottom': max(face[3] for face in normalized),
+            'count': len(normalized),
+            'image_width': valid_faces[0][4],
+            'image_height': valid_faces[0][5],
+        }
 
     @staticmethod
     def _extract_location(exif_info: dict[str, object]) -> str:
@@ -133,6 +187,7 @@ class PhotoSyncService:
         local_filename: str,
         album_name: str,
         people: list[str] | None = None,
+        face_bounds: dict[str, object] | None = None,
     ) -> dict[str, object]:
         exif_info = asset.get('exifInfo')
         exif = exif_info if isinstance(exif_info, dict) else {}
@@ -150,6 +205,7 @@ class PhotoSyncService:
             'location': cls._extract_location(exif),
             'album': album_name,
             'people': people if people is not None else cls._extract_people(asset),
+            'face_bounds': face_bounds,
             'is_favorite': bool(asset.get('isFavorite')),
         }
 
@@ -164,7 +220,7 @@ class PhotoSyncService:
         temp_path = manifest_path.with_suffix('.tmp')
         album_name = self._first_text_value(album.get('albumName'), album.get('name'))
         payload = {
-            'version': 2,
+            'version': 3,
             'album': album_name,
             'photo_order': photo_order,
             'photos': entries,
@@ -208,6 +264,19 @@ class PhotoSyncService:
         asset_id: str,
         headers: dict[str, str],
     ) -> list[str]:
+        faces = self.fetch_faces_metadata(
+            immich_server_url=immich_server_url,
+            asset_id=asset_id,
+            headers=headers,
+        )
+        return self._extract_people_from_faces(faces)
+
+    def fetch_faces_metadata(
+        self,
+        immich_server_url: str,
+        asset_id: str,
+        headers: dict[str, str],
+    ) -> object:
         query_string = urlencode({'id': asset_id})
         response = self.get_with_retries(
             url=f'{immich_server_url}/api/faces?{query_string}',
@@ -218,7 +287,7 @@ class PhotoSyncService:
             raise PermissionError('API key does not have access to read face metadata.')
 
         response.raise_for_status()
-        return self._extract_people_from_faces(response.json())
+        return response.json()
 
     def sync_photos(
         self,
@@ -283,13 +352,19 @@ class PhotoSyncService:
                 seen_manifest_filenames.add(local_filename)
 
             people = self._extract_people(asset)
-            if not people and face_metadata_available:
+            face_bounds = None
+            if face_metadata_available:
                 try:
-                    people = self.fetch_face_people(
+                    faces = self.fetch_faces_metadata(
                         immich_server_url=immich_server_url,
                         asset_id=str(asset_id),
                         headers=headers,
                     )
+                    face_people = self._extract_people_from_faces(faces)
+                    people = self._extract_people_from_person_items(
+                        [{'name': name} for name in people + face_people]
+                    )
+                    face_bounds = self._extract_face_bounds(faces)
                 except PermissionError as error:
                     face_metadata_available = False
                     self.logger.warning('Face metadata disabled: %s', error)
@@ -311,6 +386,7 @@ class PhotoSyncService:
                 local_filename=local_filename,
                 album_name=album_name,
                 people=people,
+                face_bounds=face_bounds,
             )
 
             if local_path.exists():
