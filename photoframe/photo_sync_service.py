@@ -305,9 +305,11 @@ class PhotoSyncService:
         }
 
         self._notify(progress_callback, 'Connecting to Immich...')
-        response = self.get_with_retries(
-            url=f'{immich_server_url}/api/albums/{config.album_id}',
+        #response = self.get_with_retries(
+        response = requests.post(
+            url=f'{immich_server_url}/api/search/metadata',
             headers=headers,
+            json={"albumIds": config.album_id},
             timeout=self.request_timeout_seconds,
         )
         response.raise_for_status()
@@ -316,12 +318,13 @@ class PhotoSyncService:
         if not isinstance(album, dict):
             raise ValueError('Immich album response was not a JSON object.')
 
-        raw_assets = album.get('assets', [])
+        raw_assets = album.get('assets', []).get("items", [])
         assets = [asset for asset in raw_assets if isinstance(asset, dict)] if isinstance(raw_assets, list) else []
         photos_path.mkdir(parents=True, exist_ok=True)
 
         summary = SyncSummary(remote_assets=len(assets))
-        album_name = self._first_text_value(album.get('albumName'), album.get('name'))
+        #album_name = self._first_text_value(album.get('albumName'), album.get('name'))
+        album_name = 'Picture Frame'
         manifest_entries: dict[str, dict[str, object]] = {}
         manifest_order: list[str] = []
         seen_manifest_filenames: set[str] = set()
