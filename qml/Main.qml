@@ -137,9 +137,24 @@ Window {
         return root.clamp(centeredStart, 0.0, 1.0 - cropLength)
     }
 
-    function smartCropRect() {
+    function showWholeImage() {
         var bounds = root.displayedCropInfo
         if (!bounds || bounds.left === undefined || root.width <= 0 || root.height <= 0) {
+            return false
+        }
+        if (bounds.fit_only) {
+            return true
+        }
+        var imageRatio = bounds.image_width / bounds.image_height
+        var viewportRatio = root.width / root.height
+        // Fit the entire photo when filling the viewport would cut any faces.
+        return (bounds.right - bounds.left) > Math.min(1.0, viewportRatio / imageRatio) + 0.000001
+                || (bounds.bottom - bounds.top) > Math.min(1.0, imageRatio / viewportRatio) + 0.000001
+    }
+
+    function smartCropRect() {
+        var bounds = root.displayedCropInfo
+        if (!bounds || bounds.left === undefined || root.width <= 0 || root.height <= 0 || root.showWholeImage()) {
             return Qt.rect(0, 0, 0, 0)
         }
 
@@ -176,7 +191,7 @@ Window {
 
     function smartSourceWidth() {
         var bounds = root.displayedCropInfo
-        if (!bounds || !bounds.image_width || !bounds.image_height) {
+        if (!bounds || !bounds.image_width || !bounds.image_height || root.showWholeImage()) {
             return Math.max(1, root.width)
         }
         var imageRatio = bounds.image_width / bounds.image_height
@@ -186,7 +201,7 @@ Window {
 
     function smartSourceHeight() {
         var bounds = root.displayedCropInfo
-        if (!bounds || !bounds.image_width || !bounds.image_height) {
+        if (!bounds || !bounds.image_width || !bounds.image_height || root.showWholeImage()) {
             return Math.max(1, root.height)
         }
         var imageRatio = bounds.image_width / bounds.image_height
@@ -194,27 +209,35 @@ Window {
         return Math.max(1, imageRatio > viewportRatio ? root.height : root.width / imageRatio)
     }
 
-    Image {
-        id: photo
+    Item {
         anchors.fill: parent
-        source: root.displayedImage
-        fillMode: Image.PreserveAspectCrop
-        sourceClipRect: root.smartCropRect()
-        asynchronous: true
-        cache: false
-        retainWhileLoading: false
-        // sourceClipRect uses coordinates in the sourceSize-scaled image. Keep
-        // the full image's aspect ratio here so normalized Immich coordinates
-        // map to the right pixels while Qt still decodes only display-sized data.
-        sourceSize.width: root.smartSourceWidth()
-        sourceSize.height: root.smartSourceHeight()
-        opacity: 1.0
+        clip: true
         z: -1
 
-        Component.onCompleted: {
-            root.displayedImage = root.backend.currentImage
-            root.displayedCropInfo = root.backend.currentCropInfo
-            opacity = root.displayedImage ? 1.0 : 0.0
+        Image {
+            id: photo
+            objectName: "photo"
+            x: -root.smartCropRect().x
+            y: -root.smartCropRect().y
+            width: root.smartSourceWidth()
+            height: root.smartSourceHeight()
+            source: root.displayedImage
+            fillMode: root.showWholeImage() ? Image.PreserveAspectFit : Image.PreserveAspectCrop
+            // Apply EXIF to the whole image, then crop by positioning it inside
+            // the viewport. Decoder-level sourceClipRect runs before rotation.
+            autoTransform: true
+            asynchronous: true
+            cache: false
+            retainWhileLoading: false
+            sourceSize.width: Math.ceil(width)
+            sourceSize.height: Math.ceil(height)
+            opacity: 1.0
+
+            Component.onCompleted: {
+                root.displayedImage = root.backend.currentImage
+                root.displayedCropInfo = root.backend.currentCropInfo
+                opacity = root.displayedImage ? 1.0 : 0.0
+            }
         }
     }
 
@@ -223,6 +246,12 @@ Window {
 
         function onCurrentImageChanged() {
             root.startPhotoTransition()
+        }
+
+        function onCurrentCropInfoChanged() {
+            if (root.backend.currentImage === root.displayedImage) {
+                root.displayedCropInfo = root.backend.currentCropInfo
+            }
         }
     }
 

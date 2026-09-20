@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
-import math
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 from requests.exceptions import RequestException
 
 from .config import AppConfig
+from .cropping import finite_number, same_aspect_ratio
 
 register_heif_opener()
 
@@ -65,8 +68,24 @@ class PhotoSyncService:
             progress_callback(message)
 
     @staticmethod
-    def to_local_jpg_name(original_file_name: str) -> str:
-        return f'{Path(original_file_name).stem}.jpg'
+    def to_local_jpg_name(asset_id: str, source_version: dict[str, object] | None = None) -> str:
+        # Original filenames are not unique, even within a single album.
+        suffix = ''
+        if source_version is not None:
+            signature = json.dumps(source_version, sort_keys=True).encode('utf-8')
+            suffix = '-' + hashlib.sha256(signature).hexdigest()[:16]
+        return f'asset-{quote(asset_id, safe="")}{suffix}.jpg'
+
+    @classmethod
+    def _source_version(cls, asset: dict[str, object]) -> dict[str, object]:
+        # Pixel filenames change with server edits/replacements, so a slideshow
+        # cannot apply an old manifest's bounds to newly replaced image bytes.
+        return {
+            'policy': 'edited-v1',
+            'updated_at': cls._first_text_value(asset.get('updatedAt')),
+            'checksum': cls._first_text_value(asset.get('checksum')),
+            'is_edited': asset.get('isEdited') is True,
+        }
 
     @staticmethod
     def _first_text_value(*values: object) -> str:
@@ -126,37 +145,43 @@ class PhotoSyncService:
 
     @staticmethod
     def _number(value: object, *, allow_zero: bool = False) -> float | None:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        number = finite_number(value)
+        if number is None:
             return None
-        number = float(value)
         minimum_is_valid = number >= 0 if allow_zero else number > 0
-        return number if math.isfinite(number) and minimum_is_valid else None
+        return number if minimum_is_valid else None
 
     @classmethod
     def _extract_face_bounds(cls, faces: object) -> dict[str, object] | None:
-        """Return one bounding rectangle containing every detected face."""
+        """Union visible face portions; reject malformed coordinate responses."""
         valid_faces: list[tuple[float, float, float, float, float, float]] = []
         for face in cls._face_items(faces):
             image_width = cls._number(face.get('imageWidth'))
             image_height = cls._number(face.get('imageHeight'))
-            x1 = cls._number(face.get('boundingBoxX1'), allow_zero=True)
-            y1 = cls._number(face.get('boundingBoxY1'), allow_zero=True)
-            x2 = cls._number(face.get('boundingBoxX2'))
-            y2 = cls._number(face.get('boundingBoxY2'))
+            x1 = finite_number(face.get('boundingBoxX1'))
+            y1 = finite_number(face.get('boundingBoxY1'))
+            x2 = finite_number(face.get('boundingBoxX2'))
+            y2 = finite_number(face.get('boundingBoxY2'))
 
             if None in (image_width, image_height, x1, y1, x2, y2):
-                continue
+                raise ValueError('Invalid face dimensions or coordinates.')
             assert image_width is not None and image_height is not None
             assert x1 is not None and y1 is not None and x2 is not None and y2 is not None
-            if x2 <= x1 or y2 <= y1 or x2 > image_width or y2 > image_height:
+            if x2 <= x1 or y2 <= y1:
+                raise ValueError('Inverted or empty face bounding box.')
+            # Immich transforms boxes after edits without clipping them. A
+            # partially visible face is valid; a fully removed one is irrelevant.
+            x1, y1 = max(0.0, x1), max(0.0, y1)
+            x2, y2 = min(image_width, x2), min(image_height, y2)
+            if x2 <= x1 or y2 <= y1:
                 continue
             valid_faces.append((x1, y1, x2, y2, image_width, image_height))
 
         if not valid_faces:
             return None
 
-        # Immich normally reports a common source size. Normalize first so a
-        # malformed or mixed response cannot skew the aggregate bounds.
+        # Detection and manual boxes may use different resolutions. Normalize
+        # each separately; incompatible aspect ratios require showing all pixels.
         normalized = [
             (x1 / width, y1 / height, x2 / width, y2 / height)
             for x1, y1, x2, y2, width, height in valid_faces
@@ -169,6 +194,10 @@ class PhotoSyncService:
             'count': len(normalized),
             'image_width': valid_faces[0][4],
             'image_height': valid_faces[0][5],
+            'fit_only': any(
+                not same_aspect_ratio(width, height, valid_faces[0][4], valid_faces[0][5])
+                for _, _, _, _, width, height in valid_faces
+            ),
         }
 
     @staticmethod
@@ -220,7 +249,7 @@ class PhotoSyncService:
         temp_path = manifest_path.with_suffix('.tmp')
         album_name = self._first_text_value(album.get('albumName'), album.get('name'))
         payload = {
-            'version': 3,
+            'version': 5,
             'album': album_name,
             'photo_order': photo_order,
             'photos': entries,
@@ -232,9 +261,92 @@ class PhotoSyncService:
     @staticmethod
     def convert_to_jpeg(image_bytes: bytes, output_path: Path) -> None:
         with Image.open(BytesIO(image_bytes)) as image:
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            image.save(output_path, 'JPEG', quality=95)
+            image.load()
+            # Keep already-upright JPEGs lossless; normalize all other inputs.
+            if image.format == 'JPEG' and image.getexif().get(274, 1) == 1:
+                output_path.write_bytes(image_bytes)
+            else:
+                upright = ImageOps.exif_transpose(image)
+                upright.convert('RGB').save(output_path, 'JPEG', quality=95)
+
+    @staticmethod
+    def _valid_cached_jpeg(path: Path) -> bool:
+        try:
+            with Image.open(path) as image:
+                if image.format != 'JPEG' or image.getexif().get(274, 1) != 1:
+                    return False
+                image.load()
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _save_photo(self, image_bytes: bytes, output_path: Path) -> None:
+        # A failed decode/write must never create a final, apparently cached file.
+        descriptor, filename = tempfile.mkstemp(prefix='.photo-frame-', suffix='.tmp', dir=output_path.parent)
+        os.close(descriptor)
+        temp_path = Path(filename)
+        try:
+            self.convert_to_jpeg(image_bytes, temp_path)
+            if not self._valid_cached_jpeg(temp_path):
+                raise ValueError('Downloaded image did not produce a valid upright JPEG.')
+            temp_path.replace(output_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def _read_cached_entries(self, photos_path: Path) -> dict[str, dict[str, object]]:
+        try:
+            payload = json.loads((photos_path / MANIFEST_FILENAME).read_text(encoding='utf-8'))
+            photos = payload.get('photos') if isinstance(payload, dict) else None
+            if isinstance(photos, dict):
+                entries = {name: entry for name, entry in photos.items() if isinstance(entry, dict)}
+                order = payload.get('photo_order')
+                # Put actively displayed revisions last so they take precedence
+                # over retained older revisions after an incomplete sync.
+                if isinstance(order, list):
+                    for name in order:
+                        if isinstance(name, str) and name in entries:
+                            entries[name] = entries.pop(name)
+                return entries
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as error:
+            self.logger.warning('Could not read cached photo metadata: %s', error)
+        return {}
+
+    def _fetch_album_assets(self, config: AppConfig, headers: dict[str, str]) -> list[dict[str, object]]:
+        """Finish and validate enumeration before permitting any stale cleanup."""
+        assets: dict[str, dict[str, object]] = {}
+        page = 1
+        while True:
+            response = requests.post(
+                url=f'{config.immich_server_url.rstrip("/")}/api/search/metadata',
+                headers=headers,
+                json={'albumIds': [config.album_id], 'type': 'IMAGE', 'withExif': True, 'page': page},
+                timeout=self.request_timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            result = payload.get('assets') if isinstance(payload, dict) else None
+            if not isinstance(result, dict) or not isinstance(result.get('items'), list) or 'nextPage' not in result:
+                raise ValueError('Immich search response is missing assets.items or assets.nextPage.')
+            for asset in result['items']:
+                if (not isinstance(asset, dict)
+                        or not isinstance(asset.get('id'), str) or not asset['id'].strip()
+                        or not isinstance(asset.get('originalFileName'), str) or not asset['originalFileName'].strip()):
+                    raise ValueError('Immich search returned an invalid asset; cleanup cancelled.')
+                assets[asset['id']] = asset
+            next_page = result['nextPage']
+            if next_page is None:
+                return list(assets.values())
+            if isinstance(next_page, bool) or not isinstance(next_page, (str, int)):
+                raise ValueError('Immich search returned an invalid nextPage.')
+            try:
+                next_page_number = int(next_page)
+            except ValueError as error:
+                raise ValueError('Immich search returned an invalid nextPage.') from error
+            if next_page_number != page + 1:
+                raise ValueError('Immich search returned a repeated or skipped page; cleanup cancelled.')
+            page = next_page_number
 
     def get_with_retries(
         self,
@@ -305,36 +417,27 @@ class PhotoSyncService:
         }
 
         self._notify(progress_callback, 'Connecting to Immich...')
-        #response = self.get_with_retries(
-        response = requests.post(
-            url=f'{immich_server_url}/api/search/metadata',
-            headers=headers,
-            json={"albumIds": config.album_id},
-            timeout=self.request_timeout_seconds,
-        )
-        response.raise_for_status()
-
-        album = response.json()
-        if not isinstance(album, dict):
-            raise ValueError('Immich album response was not a JSON object.')
-
-        raw_assets = album.get('assets', []).get("items", [])
-        assets = [asset for asset in raw_assets if isinstance(asset, dict)] if isinstance(raw_assets, list) else []
+        assets = self._fetch_album_assets(config, headers)
         photos_path.mkdir(parents=True, exist_ok=True)
 
         summary = SyncSummary(remote_assets=len(assets))
-        #album_name = self._first_text_value(album.get('albumName'), album.get('name'))
         album_name = 'Picture Frame'
-        manifest_entries: dict[str, dict[str, object]] = {}
+        cached_entries = self._read_cached_entries(photos_path)
+        cached_by_id: dict[str, dict[str, object]] = {}
+        for name, entry in cached_entries.items():
+            cached_id = entry.get('asset_id')
+            if isinstance(cached_id, str):
+                previous = cached_by_id.get(cached_id, {})
+                if isinstance(entry.get('source_version'), dict) or not isinstance(previous.get('source_version'), dict):
+                    cached_by_id[cached_id] = dict(entry, local_filename=name)
+        # Preserve legacy metadata if migration/download fails. Never reuse legacy
+        # pixels: filename collisions and discarded EXIF cannot be repaired locally.
+        manifest_entries = dict(cached_entries)
         manifest_order: list[str] = []
-        seen_manifest_filenames: set[str] = set()
         face_metadata_available = True
 
         expected_filenames = {
-            self.to_local_jpg_name(original_file_name)
-            for asset in assets
-            if isinstance(original_file_name := asset.get('originalFileName'), str)
-            and original_file_name.strip()
+            self.to_local_jpg_name(asset['id'], self._source_version(asset)) for asset in assets
         }
 
         for asset in assets:
@@ -346,16 +449,21 @@ class PhotoSyncService:
                 summary.skipped_invalid += 1
                 continue
 
-            local_filename = self.to_local_jpg_name(original_file_name)
+            source_version = self._source_version(asset)
+            local_filename = self.to_local_jpg_name(asset_id, source_version)
             local_path = photos_path / local_filename
-            if local_filename in seen_manifest_filenames:
-                self.logger.warning('Duplicate local filename in Immich album order: %s', local_filename)
-            else:
-                manifest_order.append(local_filename)
-                seen_manifest_filenames.add(local_filename)
+            manifest_order.append(local_filename)
 
             people = self._extract_people(asset)
-            face_bounds = None
+            cached = cached_by_id.get(asset_id, {})
+            cached_bounds = cached.get('face_bounds')
+            same_source = cached.get('source_version') == source_version
+            face_bounds = cached_bounds if same_source and isinstance(cached_bounds, dict) else None
+            cached_people = cached.get('people')
+            if isinstance(cached_people, list):
+                people = self._extract_people_from_person_items(
+                    [{'name': name} for name in people + cached_people]
+                )
             if face_metadata_available:
                 try:
                     faces = self.fetch_faces_metadata(
@@ -363,11 +471,15 @@ class PhotoSyncService:
                         asset_id=str(asset_id),
                         headers=headers,
                     )
+                    face_items = faces.get('faces') if isinstance(faces, dict) else faces
+                    if not isinstance(face_items, list) or not all(isinstance(face, dict) for face in face_items):
+                        raise ValueError('Invalid face metadata response.')
+                    fresh_bounds = self._extract_face_bounds(faces)
                     face_people = self._extract_people_from_faces(faces)
                     people = self._extract_people_from_person_items(
-                        [{'name': name} for name in people + face_people]
+                        [{'name': name} for name in self._extract_people(asset) + face_people]
                     )
-                    face_bounds = self._extract_face_bounds(faces)
+                    face_bounds = fresh_bounds
                 except PermissionError as error:
                     face_metadata_available = False
                     self.logger.warning('Face metadata disabled: %s', error)
@@ -384,20 +496,23 @@ class PhotoSyncService:
                         error,
                     )
 
-            manifest_entries[local_filename] = self._build_manifest_entry(
+            entry = self._build_manifest_entry(
                 asset=asset,
                 local_filename=local_filename,
                 album_name=album_name,
                 people=people,
                 face_bounds=face_bounds,
             )
+            entry['source_version'] = source_version
 
-            if local_path.exists():
+            if self._valid_cached_jpeg(local_path):
+                manifest_entries[local_filename] = entry
                 summary.skipped_existing += 1
                 continue
 
             self._notify(progress_callback, f'Downloading {local_filename}...')
-            download_url = f'{immich_server_url}/api/assets/{asset_id}/original'
+            # Face coordinates include Immich's crop/rotate/mirror edits.
+            download_url = f'{immich_server_url}/api/assets/{asset_id}/original?edited=true'
 
             try:
                 download_response = self.get_with_retries(
@@ -407,15 +522,14 @@ class PhotoSyncService:
                 )
                 download_response.raise_for_status()
 
-                file_ext = Path(original_file_name).suffix.lower()
-                if file_ext in JPEG_EXTENSIONS:
-                    local_path.write_bytes(download_response.content)
-                else:
+                if Path(original_file_name).suffix.lower() not in JPEG_EXTENSIONS:
                     self._notify(progress_callback, f'Converting {original_file_name} to JPG...')
-                    self.convert_to_jpeg(download_response.content, local_path)
+                self._save_photo(download_response.content, local_path)
+                if Path(original_file_name).suffix.lower() not in JPEG_EXTENSIONS:
                     summary.converted += 1
 
                 summary.downloaded += 1
+                manifest_entries[local_filename] = entry
             except RequestException as error:
                 self.logger.error('Download failed for %s: %s', local_filename, error)
                 summary.failed += 1
@@ -423,9 +537,19 @@ class PhotoSyncService:
                 self.logger.exception('Processing failed for %s', local_filename)
                 summary.failed += 1
 
+            if local_filename not in manifest_entries:
+                # Keep old pixels paired with their old bounds if refresh fails.
+                previous_filename = cached.get('local_filename')
+                if isinstance(previous_filename, str) and previous_filename in cached_entries:
+                    manifest_order[-1] = previous_filename
+
+        cleanup_allowed = not summary.failed and not summary.skipped_invalid
+        if cleanup_allowed:
+            manifest_entries = {name: entry for name, entry in manifest_entries.items() if name in expected_filenames}
+
         self._write_manifest(
             photos_path=photos_path,
-            album=album,
+            album={'albumName': album_name},
             entries=manifest_entries,
             photo_order=manifest_order,
         )
@@ -435,7 +559,8 @@ class PhotoSyncService:
             for entry in photos_path.iterdir()
             if entry.is_file() and entry.suffix.lower() in JPEG_EXTENSIONS
         }
-        for filename in sorted(existing_files - expected_filenames):
+        stale_filenames = existing_files - expected_filenames if cleanup_allowed else set()
+        for filename in sorted(stale_filenames):
             file_path = photos_path / filename
             try:
                 file_path.unlink()

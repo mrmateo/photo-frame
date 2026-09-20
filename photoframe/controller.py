@@ -10,8 +10,10 @@ import shutil
 import subprocess
 
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
+from PIL import Image
 
 from .config import AppConfig
+from .cropping import finite_number, same_aspect_ratio
 from .photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
 from .weather_service import WeatherService
 from .weather_types import UNKNOWN_WEATHER_ICON_KEY, WEATHER_ICON_EXTENSION, weather_icon_key
@@ -170,10 +172,21 @@ class PhotoFrameController(QObject):
         self.executor.shutdown(wait=False, cancel_futures=True)
 
     def _set_current_image(self, image_path: Path | None) -> None:
-        image_url = QUrl.fromLocalFile(str(image_path)).toString() if image_path else ''
+        image_url = ''
+        if image_path:
+            url = QUrl.fromLocalFile(str(image_path))
+            try:
+                # Reload even if sync repaired the file currently on screen.
+                url.setQuery(f'v={image_path.stat().st_mtime_ns}')
+            except OSError:
+                pass
+            image_url = url.toString()
+        image_changed = self._current_image != image_url
+        # Crop listeners must see the new URL so they cannot apply the next
+        # photo's bounds to the image still fading out.
+        self._current_image = image_url
         self._set_current_crop_info(self._crop_info_for_image(image_path))
-        if self._current_image != image_url:
-            self._current_image = image_url
+        if image_changed:
             self.currentImageChanged.emit()
         self._set_current_photo_details(self._format_photo_details(image_path))
 
@@ -193,9 +206,27 @@ class PhotoFrameController(QObject):
             return {}
 
         required_keys = ('left', 'top', 'right', 'bottom', 'image_width', 'image_height')
-        if not all(isinstance(bounds.get(key), (int, float)) for key in required_keys):
+        values = {key: finite_number(bounds.get(key)) for key in required_keys}
+        if any(value is None for value in values.values()):
             return {}
-        return {key: float(bounds[key]) for key in required_keys}
+        if not (0 <= values['left'] < values['right'] <= 1
+                and 0 <= values['top'] < values['bottom'] <= 1
+                and values['image_width'] > 0 and values['image_height'] > 0):
+            return {}
+        try:
+            with Image.open(image_path) as image:
+                width, height = image.size
+                if image.getexif().get(274, 1) in (5, 6, 7, 8):
+                    width, height = height, width
+        except (OSError, ValueError):
+            return {}
+        # Render with the actual upright aspect ratio, not rounded ML preview
+        # dimensions. If coordinate frames disagree, preserve the whole photo.
+        values['fit_only'] = bounds.get('fit_only') is True or not same_aspect_ratio(
+            width, height, values['image_width'], values['image_height']
+        )
+        values['image_width'], values['image_height'] = float(width), float(height)
+        return values
 
     def _set_has_images(self, has_images: bool) -> None:
         if self._has_images != has_images:
@@ -318,6 +349,12 @@ class PhotoFrameController(QObject):
         images_by_name = {path.name: path for path in images}
         ordered_images: list[Path] = []
         seen_names: set[str] = set()
+        seen_assets: set[str] = set()
+
+        def asset_id(path: Path) -> str:
+            metadata = self._photo_metadata.get(path.name)
+            value = metadata.get('asset_id') if isinstance(metadata, dict) else None
+            return value if isinstance(value, str) else ''
 
         for filename in self._photo_order:
             image_path = images_by_name.get(filename)
@@ -325,8 +362,12 @@ class PhotoFrameController(QObject):
                 continue
             ordered_images.append(image_path)
             seen_names.add(filename)
+            if identity := asset_id(image_path):
+                seen_assets.add(identity)
 
-        ordered_images.extend(path for path in images if path.name not in seen_names)
+        # Older revisions retained after a partial sync must not be shown again
+        # when a current revision of the same asset is already in the manifest.
+        ordered_images.extend(path for path in images if path.name not in seen_names and asset_id(path) not in seen_assets)
         return ordered_images
 
     @staticmethod

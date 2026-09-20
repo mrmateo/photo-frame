@@ -17,6 +17,7 @@ files = [
   "photoframe/__init__.py",
   "photoframe/config.py",
   "photoframe/controller.py",
+  "photoframe/cropping.py",
   "photoframe/photo_sync_service.py",
   "photoframe/weather_service.py",
   "photoframe/weather_types.py",

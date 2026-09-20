@@ -7,9 +7,13 @@ This implementation is structured around Qt/PySide deployment guidance:
 - deployment flow with `pyside6-project` and `pyside6-deploy`.
 
 ## Included behavior
-- Full-screen slideshow with edge tap navigation in Immich album order.
+- Full-screen slideshow with edge tap navigation in the order returned by Immich's album search.
 - Face-aware portrait cropping using Immich's detected face bounds, with a
-  centered-crop fallback when face metadata is unavailable.
+  centered-crop fallback when face metadata is unavailable. If the detected faces
+  cannot all fit in the viewport crop, the whole photo is shown with letterboxing.
+  EXIF rotation and mirrored orientations are applied before cropping.
+  Immich's edited image is requested so in-app crops, rotations, and flips match
+  its face coordinates. Inconsistent coordinate dimensions also use the whole-photo fallback.
 - Top-center tap photo metadata overlay with date, location, album,
   favorite state, filename, and tagged people when available.
 - Fade transitions and responsive info panel layout.
@@ -37,6 +41,7 @@ Optional:
 
 Recommended Immich API key permissions:
 - `album.read`: read the configured album and its asset list.
+- `asset.read`: search for the photos in the configured album.
 - `asset.download`: download each original image.
 - `face.read`: optional but recommended for smart cropping and tagged people.
   The app uses `GET /api/faces?id=<asset_id>` to keep detected faces inside the
@@ -63,6 +68,9 @@ Demo mode (no network/poweroff):
 
 Windowed simulator preview:
 - `venv/bin/python main.py --config .dev-simulator/config.json --demo-mode --windowed --window-size 800x1280`
+
+Regression tests (including offscreen QML rendering and HEIC conversion):
+- `QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software venv/bin/python -m unittest discover -s tests -v`
 
 ## Deployable package (pyside6-deploy)
 From repo root:
@@ -114,8 +122,22 @@ Override by setting `QT_QPA_PLATFORM` in `/etc/default/photo_frame`.
 ## Notes
 - If `rc_resources.py` is missing, app falls back to filesystem QML/assets and logs a warning.
 - Logs are written to `QStandardPaths.AppDataLocation/logs/photo_frame.log`.
-- Synced photo metadata and Immich album order are stored beside the downloaded photos in `.photo_frame_manifest.json`.
-- Stale cleanup only removes local `.jpg`/`.jpeg` files that are no longer present in the configured Immich album.
+- Synced photo metadata and search-result order are stored beside the downloaded photos in `.photo_frame_manifest.json`.
+- Photos are cached as `asset-<asset_id>-<revision>.jpg` so repeated camera filenames stay distinct.
+  Revision filenames keep an older slideshow's face bounds paired with its older
+  pixels while sync fetches updated photos. Changes to Immich's `updatedAt`, checksum,
+  or edit state refresh the image; this can also refresh it after metadata-only changes.
+  The first successful sync after upgrading downloads fresh images to replace
+  older filename-based caches and repair any previously lost orientation data.
+  If any download fails, existing photos are retained and migration retries on the next sync.
+- Downloads are decoded and saved atomically. Corrupt cached JPEGs are downloaded again.
+- Face metadata request failures retain the last known bounds and people for the
+  same asset and image revision; a successful empty face response clears those cached values.
+  Face boxes partly outside an edited image are clipped to its visible area;
+  faces entirely outside it do not affect cropping.
+- Stale cleanup runs only after every search-results page has been validated and
+  all required photo downloads have succeeded. It removes local `.jpg`/`.jpeg`
+  files outside the completed album cache, including obsolete filename-based copies.
 
 ## Collect Raspberry Pi diagnostics
 To collect environment details for deployment tuning:
