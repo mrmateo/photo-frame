@@ -12,9 +12,10 @@ from .weather_types import format_weather_condition
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class WeatherSnapshot:
-    text: str
+    temperature_text: str = ''
+    condition_text: str = 'Weather unavailable'
     condition: str | None = None
 
 
@@ -36,7 +37,7 @@ class WeatherService:
 
     def fetch_weather(self, config: AppConfig) -> WeatherSnapshot:
         if not config.can_fetch_weather:
-            return WeatherSnapshot(text='Weather unavailable', condition=None)
+            return WeatherSnapshot()
 
         last_error: Exception | None = None
         for attempt in range(self.request_retries):
@@ -51,12 +52,15 @@ class WeatherService:
 
                 temperature = round(data['attributes']['temperature'])
                 condition = str(data['state'])
-                weather = format_weather_condition(condition)
-                return WeatherSnapshot(text=f'{temperature}°  {weather}', condition=condition)
+                return WeatherSnapshot(
+                    temperature_text=f'{temperature}°',
+                    condition_text=format_weather_condition(condition),
+                    condition=condition,
+                )
             except (requests.RequestException, ValueError, KeyError, TypeError) as error:
                 last_error = error
                 if attempt < self.request_retries - 1:
                     time.sleep(self.retry_backoff_base_seconds ** attempt)
 
         self.logger.error('Weather request failed: %s', last_error)
-        return WeatherSnapshot(text='Weather unavailable', condition=None)
+        return WeatherSnapshot()

@@ -26,40 +26,14 @@ Window {
     readonly property real overlayWidth: Math.min(root.width * 0.72, 760)
     readonly property int overlayRadius: 14
     readonly property color overlayColor: "#73232d3f"
-    property string displayedImage: ""
-    property var displayedCropInfo: ({})
+    property var activePhotoLayer: photoLayerA
+    readonly property var incomingPhotoLayer: activePhotoLayer === photoLayerA ? photoLayerB : photoLayerA
+    readonly property string displayedImage: activePhotoLayer.imageSource
+    readonly property var displayedCropInfo: activePhotoLayer.cropInfo
+    readonly property bool photoTransitionRunning: crossFade.running
+    property bool photoLayersReady: false
     property bool controlsVisible: false
     property bool metadataVisible: false
-
-    function weatherTemperatureText() {
-        var weatherText = root.backend.weatherText
-        var legacyMatch = weatherText.match(/^(-?\d+)\s*[FC]\s*\|\s*(.+)$/)
-        if (legacyMatch) {
-            return legacyMatch[1] + "°"
-        }
-
-        var degreeMatch = weatherText.match(/^(-?\d+°)\s+(.+)$/)
-        if (degreeMatch) {
-            return degreeMatch[1]
-        }
-
-        return ""
-    }
-
-    function weatherConditionText() {
-        var weatherText = root.backend.weatherText
-        var legacyMatch = weatherText.match(/^(-?\d+)\s*[FC]\s*\|\s*(.+)$/)
-        if (legacyMatch) {
-            return legacyMatch[2]
-        }
-
-        var degreeMatch = weatherText.match(/^(-?\d+°)\s+(.+)$/)
-        if (degreeMatch) {
-            return degreeMatch[2]
-        }
-
-        return weatherText
-    }
 
     function metadataLines() {
         var rawLines = root.backend.currentPhotoDetails.split("\n")
@@ -91,22 +65,67 @@ Window {
     }
 
     function startPhotoTransition() {
-        if (fadeOut.running) {
-            return
-        }
-
-        if (!fadeIn.running && root.backend.currentImage === root.displayedImage) {
+        if (!root.photoLayersReady) {
             return
         }
 
         metadataHideTimer.stop()
         root.metadataVisible = false
-        fadeIn.stop()
-        fadeOut.start()
+
+        if (!root.backend.currentImage) {
+            crossFade.stop()
+            photoLayerA.clear()
+            photoLayerB.clear()
+            return
+        }
+
+        // Finish an in-flight dissolve before loading the latest requested photo.
+        // Rapid taps therefore never replace either of the visible image layers.
+        if (crossFade.running) {
+            return
+        }
+
+        var incoming = root.incomingPhotoLayer
+        if (root.backend.currentImage === root.displayedImage) {
+            incoming.clear()
+            return
+        }
+
+        incoming.opacity = 0
+        incoming.cropInfo = root.backend.currentCropInfo
+        incoming.imageSource = root.backend.currentImage
+        root.tryPhotoTransition()
+    }
+
+    function tryPhotoTransition() {
+        var incoming = root.incomingPhotoLayer
+        if (!root.photoLayersReady || crossFade.running || !incoming.imageSource
+                || incoming.imageSource !== root.backend.currentImage || !incoming.ready) {
+            return
+        }
+
+        if (!root.displayedImage) {
+            // The first photo can appear as soon as it has decoded.
+            root.finishPhotoTransition()
+        } else {
+            crossFade.start()
+        }
+    }
+
+    function finishPhotoTransition() {
+        var outgoing = root.activePhotoLayer
+        var incoming = root.incomingPhotoLayer
+        incoming.opacity = 1
+        root.activePhotoLayer = incoming
+        outgoing.clear()
+        if (root.backend.currentImage !== root.displayedImage) {
+            Qt.callLater(root.startPhotoTransition)
+        }
     }
 
     function showPhotoDetails() {
-        if (root.backend.currentPhotoDetails.length === 0) {
+        if (root.backend.currentPhotoDetails.length === 0
+                || root.backend.currentImage !== root.displayedImage || crossFade.running) {
             return
         }
 
@@ -137,8 +156,7 @@ Window {
         return root.clamp(centeredStart, 0.0, 1.0 - cropLength)
     }
 
-    function showWholeImage() {
-        var bounds = root.displayedCropInfo
+    function showWholeImage(bounds) {
         if (!bounds || bounds.left === undefined || root.width <= 0 || root.height <= 0) {
             return false
         }
@@ -152,9 +170,8 @@ Window {
                 || (bounds.bottom - bounds.top) > Math.min(1.0, imageRatio / viewportRatio) + 0.000001
     }
 
-    function smartCropRect() {
-        var bounds = root.displayedCropInfo
-        if (!bounds || bounds.left === undefined || root.width <= 0 || root.height <= 0 || root.showWholeImage()) {
+    function smartCropRect(bounds) {
+        if (!bounds || bounds.left === undefined || root.width <= 0 || root.height <= 0 || root.showWholeImage(bounds)) {
             return Qt.rect(0, 0, 0, 0)
         }
 
@@ -189,9 +206,8 @@ Window {
         )
     }
 
-    function smartSourceWidth() {
-        var bounds = root.displayedCropInfo
-        if (!bounds || !bounds.image_width || !bounds.image_height || root.showWholeImage()) {
+    function smartSourceWidth(bounds) {
+        if (!bounds || !bounds.image_width || !bounds.image_height || root.showWholeImage(bounds)) {
             return Math.max(1, root.width)
         }
         var imageRatio = bounds.image_width / bounds.image_height
@@ -199,9 +215,8 @@ Window {
         return Math.max(1, imageRatio > viewportRatio ? root.height * imageRatio : root.width)
     }
 
-    function smartSourceHeight() {
-        var bounds = root.displayedCropInfo
-        if (!bounds || !bounds.image_width || !bounds.image_height || root.showWholeImage()) {
+    function smartSourceHeight(bounds) {
+        if (!bounds || !bounds.image_width || !bounds.image_height || root.showWholeImage(bounds)) {
             return Math.max(1, root.height)
         }
         var imageRatio = bounds.image_width / bounds.image_height
@@ -209,20 +224,39 @@ Window {
         return Math.max(1, imageRatio > viewportRatio ? root.height : root.width / imageRatio)
     }
 
-    Item {
+    component PhotoLayer: Rectangle {
+        id: layer
+        property string imageSource: ""
+        property var cropInfo: ({})
+        readonly property bool ready: photo.status === Image.Ready
         anchors.fill: parent
         clip: true
-        z: -1
+        // Include the matte in the dissolve so fitted photos do not leave the
+        // outgoing image visible in their letterbox area.
+        color: "#000000"
+        // Composite photo and matte once before applying opacity; otherwise
+        // their separate alpha blends would darken the outgoing image twice.
+        layer.enabled: true
+        opacity: 0
+        z: root.activePhotoLayer === layer ? 0 : 1
+
+        function clear() {
+            opacity = 0
+            imageSource = ""
+            cropInfo = ({})
+        }
+
+        onReadyChanged: root.tryPhotoTransition()
 
         Image {
             id: photo
-            objectName: "photo"
-            x: -root.smartCropRect().x
-            y: -root.smartCropRect().y
-            width: root.smartSourceWidth()
-            height: root.smartSourceHeight()
-            source: root.displayedImage
-            fillMode: root.showWholeImage() ? Image.PreserveAspectFit : Image.PreserveAspectCrop
+            objectName: root.activePhotoLayer === layer ? "photo" : "incomingPhoto"
+            x: -root.smartCropRect(layer.cropInfo).x
+            y: -root.smartCropRect(layer.cropInfo).y
+            width: root.smartSourceWidth(layer.cropInfo)
+            height: root.smartSourceHeight(layer.cropInfo)
+            source: layer.imageSource
+            fillMode: root.showWholeImage(layer.cropInfo) ? Image.PreserveAspectFit : Image.PreserveAspectCrop
             // Apply EXIF to the whole image, then crop by positioning it inside
             // the viewport. Decoder-level sourceClipRect runs before rotation.
             autoTransform: true
@@ -231,14 +265,20 @@ Window {
             retainWhileLoading: false
             sourceSize.width: Math.ceil(width)
             sourceSize.height: Math.ceil(height)
-            opacity: 1.0
-
-            Component.onCompleted: {
-                root.displayedImage = root.backend.currentImage
-                root.displayedCropInfo = root.backend.currentCropInfo
-                opacity = root.displayedImage ? 1.0 : 0.0
-            }
         }
+    }
+
+    Item {
+        anchors.fill: parent
+        z: -1
+
+        PhotoLayer { id: photoLayerA }
+        PhotoLayer { id: photoLayerB }
+    }
+
+    Component.onCompleted: {
+        root.photoLayersReady = true
+        root.startPhotoTransition()
     }
 
     Connections {
@@ -250,7 +290,9 @@ Window {
 
         function onCurrentCropInfoChanged() {
             if (root.backend.currentImage === root.displayedImage) {
-                root.displayedCropInfo = root.backend.currentCropInfo
+                root.activePhotoLayer.cropInfo = root.backend.currentCropInfo
+            } else if (root.backend.currentImage === root.incomingPhotoLayer.imageSource) {
+                root.incomingPhotoLayer.cropInfo = root.backend.currentCropInfo
             }
         }
     }
@@ -276,28 +318,16 @@ Window {
     }
 
     NumberAnimation {
-        id: fadeOut
-        target: photo
+        id: crossFade
+        target: root.incomingPhotoLayer
         property: "opacity"
-        to: 0.0
-        duration: 350
-        easing.type: Easing.InOutQuad
-        onFinished: {
-            root.displayedImage = root.backend.currentImage
-            root.displayedCropInfo = root.backend.currentCropInfo
-            if (root.displayedImage) {
-                fadeIn.start()
-            }
-        }
-    }
-
-    NumberAnimation {
-        id: fadeIn
-        target: photo
-        property: "opacity"
+        from: 0.0
         to: 1.0
-        duration: 500
+        duration: 900
         easing.type: Easing.InOutQuad
+        // Keep the outgoing layer opaque. Fading both layers independently
+        // would let the black window show through and darken the midpoint.
+        onFinished: root.finishPhotoTransition()
     }
 
     Rectangle {
@@ -474,7 +504,7 @@ Window {
                 }
 
                 Text {
-                    text: root.weatherTemperatureText()
+                    text: root.backend.weather.temperatureText
                     color: "#ffffff"
                     visible: text.length > 0
                     font.pixelSize: root.isPortrait ? 31 : 27
@@ -486,7 +516,7 @@ Window {
 
                 Text {
                     Layout.fillWidth: true
-                    text: root.weatherConditionText()
+                    text: root.backend.weather.conditionText
                     color: "#e5edf6"
                     font.pixelSize: root.isPortrait ? 25 : 22
                     font.weight: Font.Normal

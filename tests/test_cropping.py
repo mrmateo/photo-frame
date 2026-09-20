@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import random
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -13,9 +14,9 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 import requests
 from PySide6.QtCore import QObject, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtQml import QQmlApplicationEngine, QJSEngine, QQmlExpression
-from PySide6.QtQuick import QQuickWindow
+from PySide6.QtQuick import QQuickImageProvider, QQuickWindow
 from PySide6.QtTest import QTest
 
 from photoframe.config import AppConfig
@@ -45,8 +46,12 @@ class CroppingTests(unittest.TestCase):
         self.engine.load(QUrl.fromLocalFile(str(ROOT / 'qml/Main.qml')))
         self.assertTrue(self.engine.rootObjects())
         self.window = self.engine.rootObjects()[0]
-        self.photo = self.window.findChild(QObject, 'photo')
         self.assertIsNotNone(self.photo)
+
+    @property
+    def photo(self):
+        # Crossfades alternate image buffers; inspect the currently displayed one.
+        return self.window.findChild(QObject, 'photo')
 
     def tearDown(self):
         self.backend.stop()
@@ -272,6 +277,108 @@ class CroppingTests(unittest.TestCase):
         self.assertEqual(self.window.property('displayedCropInfo'), before)
         self.wait_for(lambda: self.window.property('displayedImage') == self.backend.currentImage and self.ready())
         self.assertEqual(self.window.property('displayedCropInfo')['left'], .1)
+
+    def solid_image(self, name, color):
+        path = self.path / name
+        Image.new('RGB', (400, 640), color).save(path)
+        return path
+
+    def test_crossfade_blends_without_dimming_or_changing_outgoing_crop(self):
+        first = self.solid_image('first.png', 'red')
+        self.display(first, None)
+        outgoing = self.photo
+        self.backend._set_current_image(self.solid_image('next.png', 'blue'))
+        self.wait_for(lambda: self.window.property('photoTransitionRunning'))
+        QTest.qWait(430)
+        self.assertIs(self.photo, outgoing)
+        self.assertEqual(outgoing.parent().property('opacity'), 1)
+        color = self.window.grabWindow().pixelColor(200, 100)
+        self.assertGreater(color.red(), 40)
+        self.assertGreater(color.blue(), 40)
+        self.assertGreaterEqual(color.red() + color.blue(), 250)
+        self.wait_for(lambda: self.window.property('displayedImage') == self.backend.currentImage)
+        self.assertGreater(self.window.grabWindow().pixelColor(200, 100).blue(), 250)
+        self.assertEqual(outgoing.property('source').toString(), '')
+
+    def test_slow_load_keeps_current_photo_visible_until_ready(self):
+        requested = threading.Event()
+        release = threading.Event()
+
+        class DelayedImageProvider(QQuickImageProvider):
+            def __init__(self):
+                super().__init__(QQuickImageProvider.ImageType.Image)
+
+            def requestImage(self, identifier, size, requested_size):
+                requested.set()
+                release.wait(timeout=5)
+                image = QImage(400, 640, QImage.Format.Format_RGB32)
+                image.fill('blue')
+                size.setWidth(image.width())
+                size.setHeight(image.height())
+                return image
+
+        self.engine.addImageProvider('delayed', DelayedImageProvider())
+        self.display(self.solid_image('first.png', 'red'), None)
+        first_url = self.backend.currentImage
+        try:
+            self.backend._current_image = 'image://delayed/next'
+            self.backend.currentImageChanged.emit()
+            self.wait_for(requested.is_set)
+            QTest.qWait(1000)
+            self.assertFalse(self.window.property('photoTransitionRunning'))
+            self.assertEqual(self.window.property('displayedImage'), first_url)
+            self.assertGreater(self.window.grabWindow().pixelColor(200, 100).red(), 250)
+        finally:
+            release.set()
+        self.wait_for(lambda: self.window.property('photoTransitionRunning'))
+        self.wait_for(lambda: self.window.property('displayedImage') == self.backend.currentImage)
+
+    def test_failed_image_keeps_previous_photo_and_next_request_recovers(self):
+        self.display(self.solid_image('first.png', 'red'), None)
+        first_url = self.backend.currentImage
+        self.backend._set_current_image(self.path / 'missing.png')
+        QTest.qWait(1100)
+        self.assertEqual(self.window.property('displayedImage'), first_url)
+        self.assertFalse(self.window.property('photoTransitionRunning'))
+        self.assertGreater(self.window.grabWindow().pixelColor(200, 100).red(), 250)
+        self.display(self.solid_image('valid.png', 'blue'), None)
+
+    def test_rapid_navigation_finishes_dissolve_then_shows_latest_request(self):
+        self.display(self.solid_image('first.png', 'red'), None)
+        second = self.solid_image('second.png', 'blue')
+        third = self.solid_image('third.png', 'green')
+        latest = self.solid_image('latest.png', 'yellow')
+        self.backend._set_current_image(second)
+        self.wait_for(lambda: self.window.property('photoTransitionRunning'))
+        incoming = self.window.findChild(QObject, 'incomingPhoto')
+        second_url = incoming.property('source')
+        self.backend._set_current_image(third)
+        self.backend._set_current_image(latest)
+        self.assertEqual(incoming.property('source'), second_url)
+        self.wait_for(lambda: self.window.property('displayedImage') == self.backend.currentImage)
+        self.assertFalse(self.window.property('photoTransitionRunning'))
+        color = self.window.grabWindow().pixelColor(200, 100)
+        self.assertGreater(color.red(), 250)
+        self.assertGreater(color.green(), 250)
+
+    def test_fitted_photo_crossfade_clears_outgoing_photo_from_letterbox(self):
+        self.display(self.solid_image('first.png', 'red'), None)
+        fitted = self.path / 'fitted.png'
+        Image.new('RGB', (1200, 900), 'blue').save(fitted)
+        self.display(fitted, bounds(left=.05, right=.95, width=1200, height=900))
+        self.assertEqual(self.enum_value('fillMode'), 1)
+        color = self.window.grabWindow().pixelColor(200, 100)
+        self.assertLess(max(color.red(), color.green(), color.blue()), 5)
+
+    def test_removing_all_photos_cancels_crossfade(self):
+        self.display(self.solid_image('first.png', 'red'), None)
+        self.backend._set_current_image(self.solid_image('next.png', 'blue'))
+        self.wait_for(lambda: self.window.property('photoTransitionRunning'))
+        self.backend._set_current_image(None)
+        self.assertFalse(self.window.property('photoTransitionRunning'))
+        self.assertEqual(self.window.property('displayedImage'), '')
+        QTest.qWait(1000)
+        self.assertEqual(self.window.property('displayedImage'), '')
 
     def test_repaired_current_file_is_reloaded(self):
         path = self.make_image(rectangles=())

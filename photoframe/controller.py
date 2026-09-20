@@ -15,13 +15,13 @@ from PIL import Image
 from .config import AppConfig
 from .cropping import finite_number, same_aspect_ratio
 from .photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
-from .weather_service import WeatherService
+from .weather_service import WeatherService, WeatherSnapshot
 from .weather_types import UNKNOWN_WEATHER_ICON_KEY, WEATHER_ICON_EXTENSION, weather_icon_key
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 SYNC_STATUS_CLEAR_MS = 10_000
-DEMO_WEATHER_TEXT = '88°  Partly Cloudy'
+DEMO_WEATHER = WeatherSnapshot(temperature_text='88°', condition_text='Partly Cloudy', condition='partlycloudy')
 
 
 class PhotoFrameController(QObject):
@@ -29,7 +29,7 @@ class PhotoFrameController(QObject):
     hasImagesChanged = Signal()
     clockTextChanged = Signal()
     dateTextChanged = Signal()
-    weatherTextChanged = Signal()
+    weatherChanged = Signal()
     weatherIconChanged = Signal()
     syncStatusChanged = Signal()
     syncInProgressChanged = Signal()
@@ -38,7 +38,7 @@ class PhotoFrameController(QObject):
 
     syncProgressSignal = Signal(str)
     syncFinishedSignal = Signal(object, str)
-    weatherFinishedSignal = Signal(str, str)
+    weatherFinishedSignal = Signal(object)
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class PhotoFrameController(QObject):
         self._has_images = False
         self._clock_text = ''
         self._date_text = ''
-        self._weather_text = 'Weather loading...'
+        self._weather = WeatherSnapshot(condition_text='Weather loading...')
         self._weather_icon = self._resolve_weather_icon(None)
         self._sync_status = ''
         self._current_photo_details = ''
@@ -117,9 +117,9 @@ class PhotoFrameController(QObject):
     def dateText(self) -> str:
         return self._date_text
 
-    @Property(str, notify=weatherTextChanged)
-    def weatherText(self) -> str:
-        return self._weather_text
+    @Property('QVariantMap', notify=weatherChanged)
+    def weather(self) -> dict[str, str]:
+        return {'temperatureText': self._weather.temperature_text, 'conditionText': self._weather.condition_text}
 
     @Property(str, notify=weatherIconChanged)
     def weatherIcon(self) -> str:
@@ -158,7 +158,7 @@ class PhotoFrameController(QObject):
         self._sync_timer.start(hourly_interval_ms)
 
         if self.demo_mode:
-            self._set_weather_text(DEMO_WEATHER_TEXT)
+            self._set_weather(DEMO_WEATHER)
             self._set_sync_status('Demo mode: network calls disabled.', auto_clear_ms=SYNC_STATUS_CLEAR_MS)
             return
 
@@ -243,10 +243,11 @@ class PhotoFrameController(QObject):
             self._date_text = value
             self.dateTextChanged.emit()
 
-    def _set_weather_text(self, value: str) -> None:
-        if self._weather_text != value:
-            self._weather_text = value
-            self.weatherTextChanged.emit()
+    def _set_weather(self, value: WeatherSnapshot) -> None:
+        if self._weather != value:
+            self._weather = value
+            self.weatherChanged.emit()
+        self._set_weather_icon(self._resolve_weather_icon(value.condition))
 
     def _set_weather_icon(self, value: str) -> None:
         if self._weather_icon != value:
@@ -509,16 +510,14 @@ class PhotoFrameController(QObject):
     @Slot()
     def refreshWeather(self) -> None:
         if self.demo_mode:
-            self._set_weather_text(DEMO_WEATHER_TEXT)
-            self._set_weather_icon(self._resolve_weather_icon('partlycloudy'))
+            self._set_weather(DEMO_WEATHER)
             return
 
         if self._weather_in_progress:
             return
 
         if not self.config.can_fetch_weather:
-            self._set_weather_text('Weather unavailable')
-            self._set_weather_icon(self._resolve_weather_icon(None))
+            self._set_weather(WeatherSnapshot())
             return
 
         self._weather_in_progress = True
@@ -527,16 +526,15 @@ class PhotoFrameController(QObject):
     def _weather_worker(self) -> None:
         try:
             snapshot = self.weather_service.fetch_weather(self.config)
-            self.weatherFinishedSignal.emit(snapshot.text, snapshot.condition or '')
+            self.weatherFinishedSignal.emit(snapshot)
         except Exception:
             LOGGER.exception('Weather worker failed')
-            self.weatherFinishedSignal.emit('Weather unavailable', '')
+            self.weatherFinishedSignal.emit(WeatherSnapshot())
 
-    @Slot(str, str)
-    def _on_weather_finished(self, weather_text: str, condition: str) -> None:
+    @Slot(object)
+    def _on_weather_finished(self, snapshot: WeatherSnapshot) -> None:
         self._weather_in_progress = False
-        self._set_weather_text(weather_text)
-        self._set_weather_icon(self._resolve_weather_icon(condition))
+        self._set_weather(snapshot)
 
     @Slot()
     def shutdownNow(self) -> None:

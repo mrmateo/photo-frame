@@ -16,7 +16,7 @@ This implementation is structured around Qt/PySide deployment guidance:
   its face coordinates. Inconsistent coordinate dimensions also use the whole-photo fallback.
 - Top-center tap photo metadata overlay with date, location, album,
   favorite state, filename, and tagged people when available.
-- Fade transitions and responsive info panel layout.
+- Crossfade transitions that wait for the next photo to load, with responsive info panel layout.
 - Immich photo sync service (download, convert, metadata manifest, stale cleanup).
 - Home Assistant weather polling service with retries.
 - Hourly sync/weather timers and per-second clock updates.
