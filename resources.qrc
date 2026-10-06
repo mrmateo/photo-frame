@@ -1,6 +1,8 @@
 <RCC>
   <qresource prefix="/">
     <file alias="qml/Main.qml">qml/Main.qml</file>
+    <file alias="qml/Slideshow.qml">qml/Slideshow.qml</file>
+    <file alias="qml/InfoPanel.qml">qml/InfoPanel.qml</file>
     <file alias="assets/weather/cloud.svg">assets/weather/cloud.svg</file>
     <file alias="assets/weather/fog.svg">assets/weather/fog.svg</file>
     <file alias="assets/weather/heavy_rain.svg">assets/weather/heavy_rain.svg</file>

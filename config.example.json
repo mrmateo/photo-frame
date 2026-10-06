@@ -5,7 +5,7 @@
   "home_assistant_weather_url": "http://homeassistant.local:8123/api/states/weather.kord_daynight",
   "weather_api_key": "your_home_assistant_api_key",
   "local_folder": "photos",
-  "shutdown_command": ["systemctl", "poweroff"],
+  "shutdown_command": ["systemctl", "--no-ask-password", "poweroff"],
   "image_cycle_seconds": 15,
   "hourly_interval_seconds": 3600
 }

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import argparse
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import signal
 import sys
 
-from PySide6.QtCore import QCommandLineOption, QCommandLineParser, QCoreApplication, QStandardPaths, QTimer, Qt, QUrl
-from PySide6.QtGui import QCursor, QGuiApplication
-from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtCore import QCoreApplication, QStandardPaths, QTimer, Qt, QUrl
 
-from photoframe.config import AppConfig
-from photoframe.controller import PhotoFrameController
+from photoframe import __version__
+from photoframe.config import AppConfig, MAX_INTERVAL_SECONDS
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_LOCAL_CONFIG_PATH = APP_DIR / 'config.json'
@@ -20,86 +20,66 @@ RESOURCE_QML_URL = QUrl('qrc:/qml/Main.qml')
 RESOURCE_WEATHER_ICON_BASE = 'qrc:/assets/weather'
 
 
-def configure_logging(verbose: bool) -> None:
-    app_data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation))
-    log_dir = app_data_dir / 'logs'
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / 'photo_frame.log'
-
-    handlers: list[logging.Handler] = [
-        RotatingFileHandler(
-            log_path,
-            maxBytes=2 * 1024 * 1024,
-            backupCount=4,
-            encoding='utf-8',
-        )
-    ]
-    if verbose:
-        handlers.append(logging.StreamHandler())
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)s %(name)s %(message)s',
-        handlers=handlers,
-        force=True,
-    )
+def configure_logging(verbose: bool = False, log_file: Path | None = None) -> None:
+    # stderr works for terminal runs and systemd's journal without extra flags.
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO,
+                        format='%(asctime)s %(levelname)s %(name)s %(message)s',
+                        handlers=[logging.StreamHandler()], force=True)
+    if log_file is not None:
+        try:
+            log_file = log_file.expanduser()
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(log_file, maxBytes=2 * 1024 * 1024, backupCount=4, encoding='utf-8')
+            handler.setFormatter(logging.getLogger().handlers[0].formatter)
+            logging.getLogger().addHandler(handler)
+        except OSError as error:
+            logging.getLogger(__name__).warning('Cannot open optional log file %s: %s', log_file, error)
 
 
 def parse_auto_exit_seconds(raw_value: str) -> int:
     try:
-        return max(0, int(raw_value or 0))
+        value = int(raw_value)
     except ValueError as error:
-        raise ValueError('--auto-exit-seconds must be an integer value') from error
+        raise argparse.ArgumentTypeError('--auto-exit-seconds must be an integer') from error
+    if not 0 <= value <= MAX_INTERVAL_SECONDS:
+        raise argparse.ArgumentTypeError(f'--auto-exit-seconds must be between 0 and {MAX_INTERVAL_SECONDS}')
+    return value
 
 
 def parse_window_size(raw_value: str) -> tuple[int, int]:
-    normalized = raw_value.strip().lower().replace('×', 'x')
-    parts = normalized.split('x', maxsplit=1)
-    if len(parts) != 2:
-        raise ValueError('--window-size must use WIDTHxHEIGHT, for example 800x1280')
-
     try:
-        width = int(parts[0])
-        height = int(parts[1])
+        width, height = map(int, raw_value.strip().lower().replace('×', 'x').split('x'))
     except ValueError as error:
-        raise ValueError('--window-size width and height must be integers') from error
-
-    if width < 320 or height < 320:
-        raise ValueError('--window-size width and height must both be at least 320')
+        raise argparse.ArgumentTypeError('--window-size must use WIDTHxHEIGHT, for example 800x1280') from error
+    if not (320 <= width <= 16_384 and 320 <= height <= 16_384):
+        raise argparse.ArgumentTypeError('--window-size dimensions must be between 320 and 16384')
     return width, height
 
 
-def resolve_config_path(explicit_path: str, demo_mode: bool) -> Path | None:
-    if explicit_path:
-        candidate = Path(explicit_path).expanduser().resolve()
-        if not candidate.exists():
-            raise FileNotFoundError(f'Config file not found at {candidate}')
+def resolve_config_path(explicit_path: str | None, demo_mode: bool) -> Path | None:
+    selected = explicit_path or os.environ.get(DEFAULT_ENV_CONFIG_KEY, '').strip()
+    if selected:
+        candidate = Path(selected).expanduser().resolve()
+        if not candidate.is_file():
+            raise ValueError(f'Config file not found at {candidate}')
         return candidate
-
-    env_path = os.environ.get(DEFAULT_ENV_CONFIG_KEY, '').strip()
-    if env_path:
-        candidate = Path(env_path).expanduser().resolve()
-        if candidate.exists():
+    standard_path = Path(QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)) / 'config.json'
+    for candidate in (standard_path, DEFAULT_LOCAL_CONFIG_PATH):
+        if candidate.is_file():
             return candidate
-        raise FileNotFoundError(
-            f'Config file set in {DEFAULT_ENV_CONFIG_KEY} does not exist: {candidate}'
-        )
-
-    standard_config_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation))
-    standard_config_path = standard_config_dir / 'config.json'
-    if standard_config_path.exists():
-        return standard_config_path
-
-    if DEFAULT_LOCAL_CONFIG_PATH.exists():
-        return DEFAULT_LOCAL_CONFIG_PATH
-
     if demo_mode:
         return None
+    raise ValueError(f'No config found. Use --config PATH or {DEFAULT_ENV_CONFIG_KEY}, or create {standard_path}.')
 
-    raise FileNotFoundError(
-        'No config.json found. Checked: --config path, PHOTO_FRAME_CONFIG, '
-        f'{standard_config_path}, and {DEFAULT_LOCAL_CONFIG_PATH}.'
-    )
+
+def check_photos_directory(config: AppConfig) -> Path:
+    photos_path = config.resolve_photos_path()
+    existing = photos_path
+    while not existing.exists() and existing != existing.parent:
+        existing = existing.parent
+    if not existing.is_dir() or not os.access(existing, os.R_OK | os.W_OK | os.X_OK):
+        raise ValueError(f'Photo directory is not writable by this user: {photos_path}')
+    return photos_path
 
 
 def load_qml_resources() -> bool:
@@ -110,143 +90,86 @@ def load_qml_resources() -> bool:
     return True
 
 
-def build_parser() -> tuple[QCommandLineParser, dict[str, QCommandLineOption]]:
-    parser = QCommandLineParser()
-    parser.setApplicationDescription('Digital photo frame app (PySide6 + Qt Quick)')
-    parser.addHelpOption()
-    parser.addVersionOption()
-
-    config_option = QCommandLineOption(
-        ['c', 'config'],
-        'Path to JSON config file.',
-        'path',
-    )
-    demo_mode_option = QCommandLineOption(
-        ['demo-mode'],
-        'Skip network calls and power commands for UI-only demos.',
-    )
-    auto_exit_option = QCommandLineOption(
-        ['auto-exit-seconds'],
-        'Auto-close after N seconds (useful for smoke tests).',
-        'seconds',
-        '0',
-    )
-    windowed_option = QCommandLineOption(
-        ['windowed'],
-        'Run in a normal window instead of full screen.',
-    )
-    window_size_option = QCommandLineOption(
-        ['window-size'],
-        'Window size for --windowed runs, formatted WIDTHxHEIGHT.',
-        'size',
-        '1280x720',
-    )
-    verbose_option = QCommandLineOption(['verbose'], 'Enable console logging.')
-
-    parser.addOption(config_option)
-    parser.addOption(demo_mode_option)
-    parser.addOption(auto_exit_option)
-    parser.addOption(windowed_option)
-    parser.addOption(window_size_option)
-    parser.addOption(verbose_option)
-
-    return parser, {
-        'config': config_option,
-        'demo': demo_mode_option,
-        'auto_exit': auto_exit_option,
-        'windowed': windowed_option,
-        'window_size': window_size_option,
-        'verbose': verbose_option,
-    }
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description='Digital photo frame (PySide6 + Qt Quick)')
+    parser.add_argument('--version', action='version', version=__version__)
+    parser.add_argument('-c', '--config', help='Path to JSON configuration.')
+    parser.add_argument('--check-config', action='store_true', help='Validate configuration and photo-directory access without a display or network calls.')
+    parser.add_argument('--demo-mode', action='store_true', help='Skip network calls and power commands.')
+    parser.add_argument('--auto-exit-seconds', type=parse_auto_exit_seconds, default=0)
+    parser.add_argument('--windowed', action='store_true')
+    parser.add_argument('--window-size', type=parse_window_size, default=(1280, 720), metavar='WIDTHxHEIGHT')
+    parser.add_argument('--resources', choices=('auto', 'filesystem', 'embedded'), default='auto',
+                        help='Use filesystem for development; embedded requires a resource build.')
+    parser.add_argument('--log-file', type=Path, help='Also write rotating logs to this file.')
+    parser.add_argument('--verbose', action='store_true', help='Enable debug logging.')
+    return parser
 
 
 def main() -> int:
+    args = build_parser().parse_args()
     QCoreApplication.setOrganizationName('DigitalPhotoFrame')
     QCoreApplication.setApplicationName('PhotoFrame')
-    QCoreApplication.setApplicationVersion('0.2.0')
-    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
-
-    app = QGuiApplication(sys.argv)
-
-    parser, options = build_parser()
-    parser.process(app)
-
-    verbose = parser.isSet(options['verbose'])
-    configure_logging(verbose=verbose)
+    QCoreApplication.setApplicationVersion(__version__)
+    configure_logging(verbose=args.verbose, log_file=args.log_file)
     logger = logging.getLogger(__name__)
-
-    demo_mode = parser.isSet(options['demo'])
-    windowed = parser.isSet(options['windowed'])
-    if not windowed:
-        app.setOverrideCursor(QCursor(Qt.CursorShape.BlankCursor))
-
     try:
-        auto_exit_seconds = parse_auto_exit_seconds(parser.value(options['auto_exit']))
-        window_width, window_height = parse_window_size(parser.value(options['window_size']))
-        config_path = resolve_config_path(parser.value(options['config']), demo_mode=demo_mode)
+        config_path = resolve_config_path(args.config, demo_mode=args.demo_mode)
         config = AppConfig.demo(APP_DIR) if config_path is None else AppConfig.from_file(config_path)
-    except (ValueError, FileNotFoundError) as error:
-        parser.showMessageAndExit(QCommandLineParser.MessageType.Error, str(error), 1)
+        photos_path = check_photos_directory(config)
+        if args.check_config:
+            print(f'Configuration valid: {config_path or "demo defaults"}\nPhotos: {photos_path}')
+            print(f'Photo sync: {"configured" if config.can_sync else "disabled"}; '
+                  f'weather: {"configured" if config.can_fetch_weather else "disabled"}')
+            return 0
+        photos_path.mkdir(parents=True, exist_ok=True)
+    except (OSError, ValueError) as error:
+        logger.error('%s', error)
         return 1
 
-    use_qrc = load_qml_resources()
-    if use_qrc:
-        qml_url = RESOURCE_QML_URL
-        weather_icon_base = RESOURCE_WEATHER_ICON_BASE
-        logger.info('Using embedded Qt resource bundle for QML and assets.')
-    else:
-        qml_path = APP_DIR / 'qml' / 'Main.qml'
-        if not qml_path.exists():
-            logger.error('Main QML file not found at %s', qml_path)
-            return 1
+    use_qrc = args.resources != 'filesystem' and load_qml_resources()
+    if args.resources == 'embedded' and not use_qrc:
+        logger.error('Embedded resources are missing. Run scripts/bootstrap.sh or pyside6-project build .')
+        return 1
+    qml_url = RESOURCE_QML_URL if use_qrc else QUrl.fromLocalFile(str(APP_DIR / 'qml/Main.qml'))
+    weather_base = RESOURCE_WEATHER_ICON_BASE if use_qrc else str(APP_DIR / 'assets/weather')
+    logger.info('Using %s resources; photos: %s', 'embedded' if use_qrc else 'filesystem', photos_path)
 
-        qml_url = QUrl.fromLocalFile(str(qml_path))
-        weather_icon_base = str(APP_DIR / 'assets' / 'weather')
-        logger.warning(
-            'Running without embedded resources (rc_resources.py missing). '
-            'Use pyside6-project build for deployable builds.'
-        )
+    # Configuration/help commands above never initialize a GUI platform plugin.
+    from PySide6.QtGui import QCursor, QGuiApplication
+    from PySide6.QtQml import QQmlApplicationEngine
+    from photoframe.controller import PhotoFrameController
 
-    logger.info('Photos directory resolved to: %s', config.resolve_photos_path())
-    if config_path is not None:
-        logger.info('Loaded config: %s', config_path)
-    else:
-        logger.info('Running with demo config.')
-
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    app = QGuiApplication([sys.argv[0]])
+    if not args.windowed:
+        app.setOverrideCursor(QCursor(Qt.CursorShape.BlankCursor))
     engine = QQmlApplicationEngine()
-    engine.objectCreationFailed.connect(
-        lambda _url: QCoreApplication.exit(1),
-        Qt.ConnectionType.QueuedConnection,
-    )
-
-    controller = PhotoFrameController(
-        config=config,
-        weather_icon_base_url=weather_icon_base,
-        demo_mode=demo_mode,
-    )
-    engine.setInitialProperties({
-        'backend': controller,
-        'startFullScreen': not windowed,
-        'initialWindowWidth': window_width,
-        'initialWindowHeight': window_height,
-    })
+    controller = PhotoFrameController(config, weather_base, demo_mode=args.demo_mode)
+    engine.objectCreationFailed.connect(lambda _url: app.exit(1), Qt.ConnectionType.QueuedConnection)
+    engine.setInitialProperties({'backend': controller, 'startFullScreen': not args.windowed,
+                                 'initialWindowWidth': args.window_size[0], 'initialWindowHeight': args.window_size[1]})
     engine.load(qml_url)
-
     if not engine.rootObjects():
-        logger.error('QML engine failed to create root object from %s', qml_url.toString())
+        controller.stop()
+        logger.error('QML engine failed to load %s', qml_url.toString())
         return 1
 
     app.aboutToQuit.connect(controller.stop)
-    app.aboutToQuit.connect(QGuiApplication.restoreOverrideCursor)
+    if not args.windowed:
+        app.aboutToQuit.connect(QGuiApplication.restoreOverrideCursor)
+    previous_handlers = {sig: signal.signal(sig, lambda *_: app.quit()) for sig in (signal.SIGINT, signal.SIGTERM)}
     QTimer.singleShot(0, controller.start)
-
-    if auto_exit_seconds > 0:
-        logger.info('Auto exit in %s seconds', auto_exit_seconds)
-        QTimer.singleShot(auto_exit_seconds * 1000, app.quit)
-
-    return app.exec()
+    if args.auto_exit_seconds:
+        QTimer.singleShot(args.auto_exit_seconds * 1000, app.quit)
+    try:
+        return app.exec()
+    finally:
+        controller.stop()
+        # Tear down QML bindings while their Python backend is still alive.
+        del engine
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == '__main__':

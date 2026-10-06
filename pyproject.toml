@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "photo-frame"
-version = "0.2.0"
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
   "PySide6>=6.10.0",
@@ -9,13 +13,25 @@ dependencies = [
   "pillow-heif>=0.22.0",
 ]
 
+[tool.setuptools]
+packages = ["photoframe"]
+
+[tool.setuptools.dynamic]
+version = {attr = "photoframe.__version__"}
+
 [tool.pyside6-project]
 files = [
   "main.py",
   "resources.qrc",
   "qml/Main.qml",
+  "qml/Slideshow.qml",
+  "qml/InfoPanel.qml",
   "photoframe/__init__.py",
   "photoframe/config.py",
+  "photoframe/http_client.py",
+  "photoframe/manifest.py",
+  "photoframe/metadata.py",
+  "photoframe/presentation.py",
   "photoframe/controller.py",
   "photoframe/cropping.py",
   "photoframe/photo_sync_service.py",

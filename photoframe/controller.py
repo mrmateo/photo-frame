@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from datetime import datetime
-import json
 import logging
 from pathlib import Path
 import re
 import shutil
-import subprocess
+from threading import Event
 
-from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
-from PIL import Image
+from PySide6.QtCore import QObject, Property, QProcess, QTimer, QUrl, Signal, Slot
 
 from .config import AppConfig
-from .cropping import finite_number, same_aspect_ratio
-from .photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
+from .presentation import crop_info_for_image, format_photo_details
+from .manifest import PhotoManifest, PhotoMetadata
+from .photo_sync_service import PhotoSyncService
 from .weather_service import WeatherService, WeatherSnapshot
 from .weather_types import UNKNOWN_WEATHER_ICON_KEY, WEATHER_ICON_EXTENSION, weather_icon_key
 
 LOGGER = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
 SYNC_STATUS_CLEAR_MS = 10_000
+SHUTDOWN_TIMEOUT_MS = 10_000
 DEMO_WEATHER = WeatherSnapshot(temperature_text='88°', condition_text='Partly Cloudy', condition='partlycloudy')
 
 
@@ -52,8 +52,9 @@ class PhotoFrameController(QObject):
         self.demo_mode = demo_mode
         self.weather_icon_base_url = weather_icon_base_url.rstrip('/')
 
-        self.photo_sync_service = PhotoSyncService()
-        self.weather_service = WeatherService()
+        self._stopping = Event()
+        self.photo_sync_service = PhotoSyncService(cancel_event=self._stopping)
+        self.weather_service = WeatherService(cancel_event=self._stopping)
         self.executor = ThreadPoolExecutor(max_workers=2)
 
         self.photos_path = self.config.resolve_photos_path()
@@ -73,7 +74,7 @@ class PhotoFrameController(QObject):
 
         self._sync_in_progress = False
         self._weather_in_progress = False
-        self._photo_metadata: dict[str, object] = {}
+        self._photo_metadata: dict[str, PhotoMetadata] = {}
         self._photo_order: list[str] = []
 
         self._image_timer = QTimer(self)
@@ -91,6 +92,13 @@ class PhotoFrameController(QObject):
         self._status_clear_timer = QTimer(self)
         self._status_clear_timer.setSingleShot(True)
         self._status_clear_timer.timeout.connect(self._clear_sync_status)
+
+        self._shutdown_process = QProcess(self)
+        self._shutdown_process.finished.connect(self._on_shutdown_finished)
+        self._shutdown_process.errorOccurred.connect(self._on_shutdown_error)
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setSingleShot(True)
+        self._shutdown_timer.timeout.connect(self._on_shutdown_timeout)
 
         self.syncProgressSignal.connect(self._on_sync_progress)
         self.syncFinishedSignal.connect(self._on_sync_finished)
@@ -147,6 +155,8 @@ class PhotoFrameController(QObject):
 
     @Slot()
     def start(self) -> None:
+        if self._stopping.is_set():
+            return
         self.photos_path.mkdir(parents=True, exist_ok=True)
         self._reload_images(preserve_current=False)
         self._update_clock()
@@ -167,6 +177,14 @@ class PhotoFrameController(QObject):
 
     @Slot()
     def stop(self) -> None:
+        self._stopping.set()
+        self._shutdown_timer.stop()
+        if self._shutdown_process.state() != QProcess.ProcessState.NotRunning:
+            self._shutdown_process.kill()
+        if not self._sync_in_progress:
+            self.photo_sync_service.close()
+        if not self._weather_in_progress:
+            self.weather_service.close()
         for timer in (self._image_timer, self._clock_timer, self._weather_timer, self._sync_timer, self._status_clear_timer):
             timer.stop()
         self.executor.shutdown(wait=False, cancel_futures=True)
@@ -185,48 +203,15 @@ class PhotoFrameController(QObject):
         # Crop listeners must see the new URL so they cannot apply the next
         # photo's bounds to the image still fading out.
         self._current_image = image_url
-        self._set_current_crop_info(self._crop_info_for_image(image_path))
+        self._set_current_crop_info(crop_info_for_image(image_path, self._photo_metadata))
         if image_changed:
             self.currentImageChanged.emit()
-        self._set_current_photo_details(self._format_photo_details(image_path))
+        self._set_current_photo_details(format_photo_details(image_path, self._photo_metadata))
 
     def _set_current_crop_info(self, value: dict[str, object]) -> None:
         if self._current_crop_info != value:
             self._current_crop_info = value
             self.currentCropInfoChanged.emit()
-
-    def _crop_info_for_image(self, image_path: Path | None) -> dict[str, object]:
-        if image_path is None:
-            return {}
-        metadata = self._photo_metadata.get(image_path.name)
-        if not isinstance(metadata, dict):
-            return {}
-        bounds = metadata.get('face_bounds')
-        if not isinstance(bounds, dict):
-            return {}
-
-        required_keys = ('left', 'top', 'right', 'bottom', 'image_width', 'image_height')
-        values = {key: finite_number(bounds.get(key)) for key in required_keys}
-        if any(value is None for value in values.values()):
-            return {}
-        if not (0 <= values['left'] < values['right'] <= 1
-                and 0 <= values['top'] < values['bottom'] <= 1
-                and values['image_width'] > 0 and values['image_height'] > 0):
-            return {}
-        try:
-            with Image.open(image_path) as image:
-                width, height = image.size
-                if image.getexif().get(274, 1) in (5, 6, 7, 8):
-                    width, height = height, width
-        except (OSError, ValueError):
-            return {}
-        # Render with the actual upright aspect ratio, not rounded ML preview
-        # dimensions. If coordinate frames disagree, preserve the whole photo.
-        values['fit_only'] = bounds.get('fit_only') is True or not same_aspect_ratio(
-            width, height, values['image_width'], values['image_height']
-        )
-        values['image_width'], values['image_height'] = float(width), float(height)
-        return values
 
     def _set_has_images(self, has_images: bool) -> None:
         if self._has_images != has_images:
@@ -278,6 +263,8 @@ class PhotoFrameController(QObject):
 
     @Slot(str)
     def _on_sync_progress(self, message: str) -> None:
+        if self._stopping.is_set():
+            return
         self._set_sync_status(message, auto_clear_ms=None)
 
     def _reload_images(self, preserve_current: bool = True) -> None:
@@ -316,32 +303,9 @@ class PhotoFrameController(QObject):
         self._set_current_image(images[self._index])
 
     def _reload_photo_metadata(self) -> None:
-        manifest_path = self.photos_path / MANIFEST_FILENAME
-        if not manifest_path.exists():
-            self._photo_metadata = {}
-            self._photo_order = []
-            return
-
-        try:
-            payload = json.loads(manifest_path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError) as error:
-            LOGGER.warning('Could not read photo metadata manifest %s: %s', manifest_path, error)
-            self._photo_metadata = {}
-            self._photo_order = []
-            return
-
-        photos = payload.get('photos') if isinstance(payload, dict) else None
-        self._photo_metadata = photos if isinstance(photos, dict) else {}
-
-        photo_order = payload.get('photo_order') if isinstance(payload, dict) else None
-        if isinstance(photo_order, list):
-            self._photo_order = [
-                filename.strip()
-                for filename in photo_order
-                if isinstance(filename, str) and filename.strip()
-            ]
-        else:
-            self._photo_order = []
+        manifest = PhotoManifest.load(self.photos_path)
+        self._photo_metadata = manifest.photos
+        self._photo_order = manifest.photo_order
 
     def _order_images_by_manifest(self, images: list[Path]) -> list[Path]:
         if not self._photo_order:
@@ -370,64 +334,6 @@ class PhotoFrameController(QObject):
         # when a current revision of the same asset is already in the manifest.
         ordered_images.extend(path for path in images if path.name not in seen_names and asset_id(path) not in seen_assets)
         return ordered_images
-
-    @staticmethod
-    def _metadata_text(value: object) -> str:
-        return value.strip() if isinstance(value, str) else ''
-
-    @staticmethod
-    def _format_people(people: object) -> str:
-        if not isinstance(people, list):
-            return ''
-
-        names = [name.strip() for name in people if isinstance(name, str) and name.strip()]
-        if not names:
-            return ''
-
-        visible_names = names[:4]
-        suffix = f' +{len(names) - 4}' if len(names) > 4 else ''
-        return f"With: {', '.join(visible_names)}{suffix}"
-
-    @staticmethod
-    def _format_taken_at(raw_value: object) -> str:
-        if not isinstance(raw_value, str) or not raw_value.strip():
-            return ''
-
-        normalized = raw_value.strip().replace('Z', '+00:00')
-        try:
-            taken_at = datetime.fromisoformat(normalized)
-        except ValueError:
-            return raw_value.strip()
-
-        return taken_at.strftime('%B %d, %Y').replace(' 0', ' ')
-
-    def _format_photo_details(self, image_path: Path | None) -> str:
-        if image_path is None:
-            return ''
-
-        metadata = self._photo_metadata.get(image_path.name)
-        if not isinstance(metadata, dict):
-            return image_path.name
-
-        lines = [
-            self._format_taken_at(metadata.get('taken_at')),
-            self._metadata_text(metadata.get('location')),
-            self._format_people(metadata.get('people')),
-        ]
-
-        album = self._metadata_text(metadata.get('album'))
-        if album:
-            lines.append(f'Album: {album}')
-
-        if metadata.get('is_favorite') is True:
-            lines.append('Favorite')
-
-        original_filename = self._metadata_text(metadata.get('original_filename'))
-        if original_filename and original_filename != image_path.name:
-            lines.append(original_filename)
-
-        visible_lines = [line for line in lines if line]
-        return '\n'.join(visible_lines) if visible_lines else image_path.name
 
     def _update_clock(self) -> None:
         now = datetime.now()
@@ -467,6 +373,8 @@ class PhotoFrameController(QObject):
 
     @Slot()
     def syncNow(self) -> None:
+        if self._stopping.is_set():
+            return
         if self.demo_mode:
             self._set_sync_status('Demo mode: sync skipped.', auto_clear_ms=SYNC_STATUS_CLEAR_MS)
             return
@@ -484,19 +392,26 @@ class PhotoFrameController(QObject):
         self.executor.submit(self._sync_worker)
 
     def _sync_worker(self) -> None:
+        result, error_text = {}, ''
         try:
-            summary = self.photo_sync_service.sync_photos(
-                config=self.config,
-                photos_path=self.photos_path,
+            result = self.photo_sync_service.sync_photos(
+                config=self.config, photos_path=self.photos_path,
                 progress_callback=self.syncProgressSignal.emit,
-            )
-            self.syncFinishedSignal.emit(summary.to_dict(), '')
+            ).to_dict()
+        except CancelledError:
+            return
         except Exception as error:
             LOGGER.exception('Sync worker failed')
-            self.syncFinishedSignal.emit({}, str(error))
+            error_text = str(error)
+        finally:
+            self.photo_sync_service.close()
+        if not self._stopping.is_set():
+            self.syncFinishedSignal.emit(result, error_text)
 
     @Slot(object, str)
     def _on_sync_finished(self, summary: object, error_text: str) -> None:
+        if self._stopping.is_set():
+            return
         self._set_sync_in_progress(False)
 
         if error_text:
@@ -509,6 +424,8 @@ class PhotoFrameController(QObject):
 
     @Slot()
     def refreshWeather(self) -> None:
+        if self._stopping.is_set():
+            return
         if self.demo_mode:
             self._set_weather(DEMO_WEATHER)
             return
@@ -526,43 +443,64 @@ class PhotoFrameController(QObject):
     def _weather_worker(self) -> None:
         try:
             snapshot = self.weather_service.fetch_weather(self.config)
-            self.weatherFinishedSignal.emit(snapshot)
+        except CancelledError:
+            return
         except Exception:
             LOGGER.exception('Weather worker failed')
-            self.weatherFinishedSignal.emit(WeatherSnapshot())
+            snapshot = WeatherSnapshot()
+        finally:
+            self.weather_service.close()
+        if not self._stopping.is_set():
+            self.weatherFinishedSignal.emit(snapshot)
 
     @Slot(object)
     def _on_weather_finished(self, snapshot: WeatherSnapshot) -> None:
+        if self._stopping.is_set():
+            return
         self._weather_in_progress = False
         self._set_weather(snapshot)
 
     @Slot()
     def shutdownNow(self) -> None:
+        if self._stopping.is_set() or self._shutdown_process.state() != QProcess.ProcessState.NotRunning:
+            return
         if self.demo_mode:
             self._set_sync_status('Demo mode: shutdown skipped.', auto_clear_ms=3000)
             return
-
         command = self._resolve_shutdown_command()
-        try:
-            subprocess.run(command, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError) as error:
-            LOGGER.error('Power off failed: %s', error)
-            self._set_sync_status(
-                'Failed to power off. Set shutdown_command in config if needed.',
-                auto_clear_ms=SYNC_STATUS_CLEAR_MS,
-            )
+        self._shutdown_timer.start(SHUTDOWN_TIMEOUT_MS)
+        self._shutdown_process.start(command[0], command[1:])
+
+    def _shutdown_failed(self, reason: str) -> None:
+        self._shutdown_timer.stop()
+        LOGGER.error('Power off failed: %s', reason)
+        if not self._stopping.is_set():
+            self._set_sync_status('Failed to power off. Check shutdown_command and service logs.',
+                                  auto_clear_ms=SYNC_STATUS_CLEAR_MS)
+
+    def _on_shutdown_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        self._shutdown_timer.stop()
+        if exit_code != 0 or exit_status != QProcess.ExitStatus.NormalExit:
+            self._shutdown_failed(f'command exited with status {exit_code}')
+
+    def _on_shutdown_error(self, error: QProcess.ProcessError) -> None:
+        self._shutdown_failed(self._shutdown_process.errorString())
+
+    def _on_shutdown_timeout(self) -> None:
+        self._shutdown_process.kill()
+        self._shutdown_failed('command timed out')
 
     def _resolve_shutdown_command(self) -> list[str]:
         if self.config.shutdown_command:
             return list(self.config.shutdown_command)
 
         if shutil.which('systemctl'):
-            return ['systemctl', 'poweroff']
+            return ['systemctl', '--no-ask-password', 'poweroff']
 
         if shutil.which('shutdown'):
             return ['shutdown', '-h', 'now']
 
-        return ['sudo', 'shutdown', 'now']
+        return ['sudo', '-n', 'shutdown', 'now']
 
     @staticmethod
     def _format_sync_summary(summary: dict[str, int]) -> str:
@@ -583,11 +521,8 @@ class PhotoFrameController(QObject):
             return 'Sync complete: no changes.'
         return f"Sync complete: {', '.join(changes)}."
 
-    def _resolve_weather_icon_key(self, condition: str | None) -> str:
-        return weather_icon_key(condition)
-
     def _resolve_weather_icon(self, condition: str | None) -> str:
-        icon_key = self._resolve_weather_icon_key(condition)
+        icon_key = weather_icon_key(condition)
         icon_filename = f'{icon_key}{WEATHER_ICON_EXTENSION}'
 
         if self.weather_icon_base_url.startswith('qrc:/'):

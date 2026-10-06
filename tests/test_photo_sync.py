@@ -9,7 +9,9 @@ from PIL import Image, ImageDraw, ImageOps
 import requests
 
 from photoframe.config import AppConfig
-from photoframe.photo_sync_service import MANIFEST_FILENAME, PhotoSyncService
+from photoframe import metadata
+from photoframe.manifest import MANIFEST_FILENAME
+from photoframe.photo_sync_service import PhotoSyncService
 
 
 def image_bytes(color='red', size=(120, 90), orientation=1, format='JPEG'):
@@ -51,16 +53,17 @@ class PhotoSyncTests(unittest.TestCase):
         self.path = Path(self.temp.name)
         self.config = AppConfig(immich_server_url='https://example.invalid/', api_key='test', album_id='album')
         self.service = PhotoSyncService(logger=Mock())
-        self.service.get_with_retries = Mock(return_value=response(content=image_bytes()))
+        self.download = Mock(return_value=response(content=image_bytes()))
         self.service.fetch_faces_metadata = Mock(return_value=[face()])
-        self.post = self.enterContext(patch('photoframe.photo_sync_service.requests.post'))
+        self.post = Mock()
+        self.service.client.request = Mock(side_effect=lambda method, **kwargs: (self.post if method == 'POST' else self.download)(**kwargs))
         self.post.return_value = page([asset('a')])
 
     def sync(self):
         return self.service.sync_photos(self.config, self.path)
 
     def local(self, asset_id, source=None):
-        version = self.service._source_version(source or asset(asset_id))
+        version = metadata.source_version(source or asset(asset_id))
         return self.path / self.service.to_local_jpg_name(asset_id, version)
 
     def manifest(self):
@@ -70,9 +73,9 @@ class PhotoSyncTests(unittest.TestCase):
         filename = filename or self.local('a').name
         (self.path / filename).write_bytes(image_bytes())
         entry = {'asset_id': 'a', 'local_filename': filename, 'people': ['Alex'],
-                 'face_bounds': self.service._extract_face_bounds([face()])}
+                 'face_bounds': metadata.extract_face_bounds([face()])}
         if filename == self.local('a').name:
-            entry['source_version'] = self.service._source_version(asset('a'))
+            entry['source_version'] = metadata.source_version(asset('a'))
         (self.path / MANIFEST_FILENAME).write_text(json.dumps({'version': 3, 'photos': {filename: entry}}))
         return entry
 
@@ -103,7 +106,7 @@ class PhotoSyncTests(unittest.TestCase):
                     self.sync()
                 self.assertEqual((self.path / MANIFEST_FILENAME).read_bytes(), old_manifest)
                 self.assertTrue(self.local('a').exists())
-                self.service.get_with_retries.assert_not_called()
+                self.download.assert_not_called()
         self.post.side_effect = [page([asset('b')], '2'), requests.Timeout('offline')]
         with self.assertRaises(requests.Timeout):
             self.sync()
@@ -118,7 +121,7 @@ class PhotoSyncTests(unittest.TestCase):
 
     def test_duplicate_original_names_keep_pixels_and_faces_separate(self):
         self.post.return_value = page([asset('a', 'IMG_0001.jpg'), asset('b', 'IMG_0001.png')])
-        self.service.get_with_retries.side_effect = [response(content=image_bytes('red')),
+        self.download.side_effect = [response(content=image_bytes('red')),
                                                    response(content=image_bytes('green', format='PNG'))]
         self.service.fetch_faces_metadata.side_effect = [[face(100)], [face(800)]]
         summary = self.sync()
@@ -133,7 +136,7 @@ class PhotoSyncTests(unittest.TestCase):
 
     def test_legacy_cache_is_replaced_from_original_with_orientation(self):
         self.seed_cache('photo.jpg')
-        self.service.get_with_retries.return_value = response(content=image_bytes(orientation=6))
+        self.download.return_value = response(content=image_bytes(orientation=6))
         summary = self.sync()
         self.assertEqual(summary.downloaded, 1)
         self.assertFalse((self.path / 'photo.jpg').exists())
@@ -144,12 +147,12 @@ class PhotoSyncTests(unittest.TestCase):
 
     def test_failed_migration_preserves_legacy_photos_and_metadata(self):
         old = self.seed_cache('photo.jpg')
-        self.service.get_with_retries.side_effect = requests.Timeout('offline')
+        self.download.side_effect = requests.Timeout('offline')
         self.assertEqual(self.sync().failed, 1)
         self.assertTrue((self.path / 'photo.jpg').exists())
         self.assertEqual(self.manifest()['photos']['photo.jpg'], old)
         self.assertFalse(self.local('a').exists())
-        self.service.get_with_retries.side_effect = None
+        self.download.side_effect = None
         self.sync()
         self.assertTrue(self.local('a').exists())
         self.assertFalse((self.path / 'photo.jpg').exists())
@@ -158,8 +161,8 @@ class PhotoSyncTests(unittest.TestCase):
         old = self.seed_cache('photo.jpg')
         self.local('a').write_bytes(image_bytes())
         newer = dict(old, local_filename=self.local('a').name,
-                     source_version=self.service._source_version(asset('a')),
-                     face_bounds=self.service._extract_face_bounds([face(800)]))
+                     source_version=metadata.source_version(asset('a')),
+                     face_bounds=metadata.extract_face_bounds([face(800)]))
         # Legacy filenames sort after asset filenames in the on-disk manifest.
         (self.path / MANIFEST_FILENAME).write_text(json.dumps({
             'photos': {self.local('a').name: newer, 'photo.jpg': old}
@@ -227,10 +230,10 @@ class PhotoSyncTests(unittest.TestCase):
         self.assertEqual(self.sync().downloaded, 1)
         self.assertTrue(self.service._valid_cached_jpeg(self.local('a')))
         self.assertEqual(self.sync().skipped_existing, 1)
-        self.assertEqual(self.service.get_with_retries.call_count, 1)
+        self.assertEqual(self.download.call_count, 1)
 
     def test_invalid_download_does_not_become_cached(self):
-        self.service.get_with_retries.return_value = response(content=b'not an image')
+        self.download.return_value = response(content=b'not an image')
         self.assertEqual(self.sync().failed, 1)
         self.assertFalse(self.local('a').exists())
         self.assertEqual(list(self.path.glob('.photo-frame-*.tmp')), [])
@@ -255,20 +258,20 @@ class PhotoSyncTests(unittest.TestCase):
         self.assertTrue(self.service._valid_cached_jpeg(self.local('a')))
 
     def test_face_bounds_validation_and_mixed_source_scales(self):
-        bounds = self.service._extract_face_bounds({'faces': [face(), dict(face(1600), imageWidth=2000,
+        bounds = metadata.extract_face_bounds({'faces': [face(), dict(face(1600), imageWidth=2000,
                   imageHeight=2000, boundingBoxX2=1800, boundingBoxY1=200, boundingBoxY2=400)]})
         self.assertEqual((bounds['left'], bounds['right'], bounds['count']), (.1, .9, 2))
         for field, value in [('imageWidth', 0), ('imageHeight', float('nan')), ('boundingBoxX1', True),
                              ('imageWidth', 10**1000), ('boundingBoxX2', 50)]:
             with self.subTest(field=field), self.assertRaises(ValueError):
-                self.service._extract_face_bounds([dict(face(), **{field: value})])
+                metadata.extract_face_bounds([dict(face(), **{field: value})])
 
     def test_edited_download_matches_face_coordinate_frame(self):
         edited = dict(asset('a'), isEdited=True, updatedAt='v1')
         self.post.return_value = page([edited])
         original = image_bytes('red')
         edited_image = image_bytes('green', size=(90, 120))
-        self.service.get_with_retries.side_effect = lambda url, **kwargs: response(
+        self.download.side_effect = lambda url, **kwargs: response(
             content=edited_image if url.endswith('?edited=true') else original
         )
         self.sync()
@@ -292,7 +295,7 @@ class PhotoSyncTests(unittest.TestCase):
             self.assertEqual((self.path / MANIFEST_FILENAME).read_bytes(), old_manifest)
             return response(content=image_bytes('green'))
 
-        self.service.get_with_retries.side_effect = during_download
+        self.download.side_effect = during_download
         summary = self.sync()
         self.assertEqual(summary.downloaded, 1)
         new_path = self.local('a', edited)
@@ -309,7 +312,7 @@ class PhotoSyncTests(unittest.TestCase):
         edited = dict(asset('a'), isEdited=True, updatedAt='v2')
         self.post.return_value = page([edited])
         self.service.fetch_faces_metadata.return_value = [face(800)]
-        self.service.get_with_retries.side_effect = requests.Timeout('offline')
+        self.download.side_effect = requests.Timeout('offline')
         self.assertEqual(self.sync().failed, 1)
         self.assertEqual(self.local('a').read_bytes(), old_bytes)
         self.assertEqual(self.manifest()['photos'], old_manifest['photos'])
@@ -337,11 +340,11 @@ class PhotoSyncTests(unittest.TestCase):
         self.assertIsNone(self.manifest()['photos'][self.local('a').name]['face_bounds'])
 
     def test_inconsistent_face_coordinate_frames_require_whole_image(self):
-        result = self.service._extract_face_bounds([face(), dict(face(800), imageHeight=2000)])
+        result = metadata.extract_face_bounds([face(), dict(face(800), imageHeight=2000)])
         self.assertTrue(result['fit_only'])
 
     def test_same_aspect_ratio_at_different_scales_can_still_crop(self):
-        result = self.service._extract_face_bounds([face(), dict(face(1600), imageWidth=2000,
+        result = metadata.extract_face_bounds([face(), dict(face(1600), imageWidth=2000,
                  imageHeight=2000, boundingBoxX2=1800, boundingBoxY1=200, boundingBoxY2=400)])
         self.assertFalse(result['fit_only'])
 
@@ -358,12 +361,12 @@ class PhotoSyncTests(unittest.TestCase):
         self.sync()
         self.post.return_value = page([current, asset('b')])
         self.service.fetch_faces_metadata.side_effect = [[face(800)], [face()]]
-        self.service.get_with_retries.side_effect = [response(content=image_bytes('green')), requests.Timeout('offline')]
+        self.download.side_effect = [response(content=image_bytes('green')), requests.Timeout('offline')]
         self.assertEqual(self.sync().failed, 1)
         self.assertTrue(self.local('a', previous).exists())
         self.assertTrue(self.local('a', current).exists())
         self.service.fetch_faces_metadata.side_effect = requests.Timeout('offline')
-        self.service.get_with_retries.side_effect = requests.Timeout('offline')
+        self.download.side_effect = requests.Timeout('offline')
         self.sync()
         self.assertEqual(self.manifest()['photos'][self.local('a', current).name]['face_bounds']['left'], .8)
 

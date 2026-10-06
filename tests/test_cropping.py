@@ -15,11 +15,12 @@ from PIL import Image, ImageDraw
 import requests
 from PySide6.QtCore import QObject, QUrl
 from PySide6.QtGui import QGuiApplication, QImage
-from PySide6.QtQml import QQmlApplicationEngine, QJSEngine, QQmlExpression
+from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression
 from PySide6.QtQuick import QQuickImageProvider, QQuickWindow
 from PySide6.QtTest import QTest
 
 from photoframe.config import AppConfig
+from photoframe.presentation import crop_info_for_image
 from photoframe.controller import PhotoFrameController
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -242,10 +243,12 @@ class CroppingTests(unittest.TestCase):
                 return http_response([face])
             return http_response(content=edited_bytes if url.endswith('?edited=true') else original_bytes)
 
-        with patch('photoframe.photo_sync_service.requests.get', side_effect=get), patch(
-            'photoframe.photo_sync_service.requests.post',
-            return_value=http_response({'assets': {'items': [remote_asset], 'nextPage': None}}),
-        ):
+        def request(method, url, **kwargs):
+            if method == 'POST':
+                return http_response({'assets': {'items': [remote_asset], 'nextPage': None}})
+            return get(url, **kwargs)
+
+        with patch.object(self.backend.photo_sync_service.client, 'request', side_effect=request):
             summary = self.backend.photo_sync_service.sync_photos(self.backend.config, cache)
         self.assertEqual(summary.downloaded, 1)
         self.backend._on_sync_finished(summary.to_dict(), '')
@@ -408,20 +411,19 @@ class CroppingTests(unittest.TestCase):
                            ('image_width', 10**1000)]:
             with self.subTest(key=key):
                 self.backend._photo_metadata[path.name] = {'face_bounds': dict(bounds(), **{key: value})}
-                self.assertEqual(self.backend._crop_info_for_image(path), {})
+                self.assertEqual(crop_info_for_image(path, self.backend._photo_metadata), {})
 
     def test_crop_axis_preserves_all_faces_when_they_fit(self):
-        # Execute the production QML's JS, not a Python reimplementation.
-        source = (ROOT / 'qml/Main.qml').read_text()
-        engine = QJSEngine()
-        functions = source[source.index('    function clamp('):source.index('    function showWholeImage(')]
-        result = engine.evaluate(functions + '\nvar root = {clamp: clamp}; cropAxis;')
-        self.assertFalse(result.isError())
+        # Invoke the actual component; moving/reformatting its source cannot break this test.
+        slideshow = self.window.findChild(QObject, 'slideshow')
+        expression = QQmlExpression(self.engine.contextForObject(slideshow), slideshow, 'cropAxis')
+        function, _ = expression.evaluate()
+        self.assertFalse(expression.hasError())
         rng = random.Random(1)
         for _ in range(10000):
             start, end = sorted((rng.random(), rng.random()))
             length = rng.random()
-            offset = result.call([start, end, length]).toNumber()
+            offset = function.call([start, end, length]).toNumber()
             self.assertGreaterEqual(offset, -1e-10)
             self.assertLessEqual(offset + length, 1 + 1e-10)
             if end - start <= length:
